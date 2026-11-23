@@ -1,33 +1,84 @@
-//! Tray/window icons. The idle tray icon is the icon theme's "radio"
-//! icon — the same icon the .desktop entry references — so the tray and
-//! the app menu match. Everything else (window icon, playing fallback)
-//! is the procedurally drawn RadioPit logo (radio waves + dot). No
-//! binary assets needed.
+//! Tray/window icons. The tray icon is the icon theme's "radio" icon —
+//! the same icon the .desktop entry references — so the tray and the app
+//! menu match; while playing, a green dot marks the antenna tip. The
+//! procedurally drawn RadioPit logo (radio waves + dot) remains the
+//! window icon and the last-resort fallback. No binary assets needed.
 
 pub const ICON_SIZE: u32 = 64;
+
+/// Center of the antenna tip and radius of the green ball in the theme's
+/// "radio" icon (the top-left end of the diagonal antenna).
+const ANTENNA_TIP: (u32, u32) = (11, 9);
+const ANTENNA_DOT_R: f32 = 3.0;
 
 /// Idle tray icon: the theme's "radio" icon, or the procedural logo when
 /// the icon theme has no such icon.
 pub fn idle_icon() -> tray_icon::Icon {
-    theme_radio_icon().unwrap_or_else(|| tray_icon(false))
+    theme_radio_rgba()
+        .and_then(|rgba| tray_icon::Icon::from_rgba(rgba, ICON_SIZE, ICON_SIZE).ok())
+        .unwrap_or_else(|| tray_icon(false))
 }
 
-/// The "radio" icon from the icon theme, at `ICON_SIZE`.
+/// Tray icon for a playing station without an icon of its own: the
+/// theme's "radio" icon with a green dot at the tip of the antenna, or
+/// the procedural logo when the icon theme has no such icon.
+pub fn playing_icon() -> tray_icon::Icon {
+    match theme_radio_rgba() {
+        Some(rgba) => tray_icon::Icon::from_rgba(
+            with_antenna_dot(rgba),
+            ICON_SIZE,
+            ICON_SIZE,
+        )
+        .unwrap_or_else(|_| tray_icon(true)),
+        None => tray_icon(true),
+    }
+}
+
+/// The "radio" icon from the icon theme, at `ICON_SIZE`, as RGBA.
 #[cfg(target_os = "linux")]
-fn theme_radio_icon() -> Option<tray_icon::Icon> {
+fn theme_radio_rgba() -> Option<Vec<u8>> {
     use gtk::prelude::*;
     let theme = gtk::IconTheme::default()?;
     let pb = theme
         .load_icon("radio", ICON_SIZE as i32, gtk::IconLookupFlags::FORCE_SIZE)
         .ok()
         .flatten()?;
-    let rgba = pixbuf_to_rgba(&pb)?;
-    tray_icon::Icon::from_rgba(rgba, ICON_SIZE, ICON_SIZE).ok()
+    pixbuf_to_rgba(&pb)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn theme_radio_icon() -> Option<tray_icon::Icon> {
+fn theme_radio_rgba() -> Option<Vec<u8>> {
     None
+}
+
+/// Overlay a green ball at the tip of the antenna so the playing state
+/// is visible at a glance (same green as the logo's dot).
+fn with_antenna_dot(rgba: Vec<u8>) -> Vec<u8> {
+    let mut px = rgba;
+    let (cx, cy) = (ANTENNA_TIP.0 as f32, ANTENNA_TIP.1 as f32);
+    let dot: [u8; 3] = [74, 222, 128];
+    let r = ANTENNA_DOT_R;
+    let x0 = (cx - r - 1.0).max(0.0) as u32;
+    let x1 = (cx + r + 1.0).min(ICON_SIZE as f32) as u32;
+    let y0 = (cy - r - 1.0).max(0.0) as u32;
+    let y1 = (cy + r + 1.0).min(ICON_SIZE as f32) as u32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let dx = (x as f32 + 0.5) - cx;
+            let dy = (y as f32 + 0.5) - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let cov = (r + 0.5 - dist).clamp(0.0, 1.0);
+            if cov <= 0.0 {
+                continue;
+            }
+            let idx = ((y * ICON_SIZE + x) * 4) as usize;
+            px[idx] = (dot[0] as f32 * cov + px[idx] as f32 * (1.0 - cov)) as u8;
+            px[idx + 1] = (dot[1] as f32 * cov + px[idx + 1] as f32 * (1.0 - cov)) as u8;
+            px[idx + 2] = (dot[2] as f32 * cov + px[idx + 2] as f32 * (1.0 - cov)) as u8;
+            px[idx + 3] = (cov * 255.0).max(px[idx + 3] as f32) as u8;
+        }
+    }
+    px
 }
 
 /// Copy a pixbuf (RGB or RGBA, arbitrary rowstride) to tightly packed

@@ -32,12 +32,9 @@ use crate::state::{Playback, Shared};
 /// What the tray icon currently shows.
 #[derive(Clone, PartialEq, Debug)]
 enum ShownIcon {
-    /// The icon theme's "radio" icon (the .desktop entry's icon), shown
-    /// when nothing is playing.
-    Theme,
-    /// The procedural RadioPit logo; the playing fallback while a station
-    /// icon is loading or when the station has none.
-    Logo,
+    /// The icon theme's "radio" icon (the .desktop entry's icon);
+    /// bool = playing (green dot at the antenna tip).
+    Theme(bool),
     /// The icon of the station with this id.
     Station(String),
 }
@@ -106,7 +103,7 @@ impl TrayApp {
             runtime,
             handle,
             tray_icon_cache: HashMap::new(),
-            tray_shown: ShownIcon::Theme,
+            tray_shown: ShownIcon::Theme(false),
             config_mtime,
         })
     }
@@ -331,7 +328,7 @@ impl TrayApp {
             let playing = s.playback == Playback::Playing;
             // The station icon is shown while a stream is active; when
             // none is available (fetch pending, no URL, failure) the
-            // idle theme icon shows, or the logo while actually playing.
+            // theme's radio icon shows, dotted while actually playing.
             let want = match s.playback {
                 Playback::Loading | Playback::Playing => s
                     .current
@@ -363,18 +360,14 @@ impl TrayApp {
                 self.tray_shown = ShownIcon::Station(sid);
                 return icon::tray_icon_from_rgba(rgba.clone());
             }
-            // 2) Fetch/decode this station's icon (falls back to the idle
-            //    or logo icon while the fetch is in flight or when there
+            // 2) Fetch/decode this station's icon (falls back to the
+            //    theme icon while the fetch is in flight or when there
             //    is none).
             if let Some(ic) = self.try_station_icon(&sid, url.as_deref()) {
                 return Some(ic);
             }
         }
-        if playing {
-            self.apply_logo()
-        } else {
-            self.apply_idle()
-        }
+        self.apply_theme(playing)
     }
 
     /// Try to get (or start fetching) the icon for a station. Returns the
@@ -448,25 +441,19 @@ impl TrayApp {
         None
     }
 
-    /// Show the idle icon: the icon theme's "radio" icon (the same one
-    /// the .desktop entry uses), or the procedural logo when the theme
-    /// has none.
-    fn apply_idle(&mut self) -> Option<tray_icon::Icon> {
-        if self.tray_shown == ShownIcon::Theme {
+    /// Show the theme's "radio" icon (the same one the .desktop entry
+    /// uses), with a green dot at the antenna tip while playing; falls
+    /// back to the procedural logo when the theme has no such icon.
+    fn apply_theme(&mut self, playing: bool) -> Option<tray_icon::Icon> {
+        if self.tray_shown == ShownIcon::Theme(playing) {
             return None;
         }
-        self.tray_shown = ShownIcon::Theme;
-        Some(icon::idle_icon())
-    }
-
-    /// Show the procedural RadioPit logo (fallback while a station icon
-    /// is loading, or when the station has none).
-    fn apply_logo(&mut self) -> Option<tray_icon::Icon> {
-        if self.tray_shown == ShownIcon::Logo {
-            return None;
-        }
-        self.tray_shown = ShownIcon::Logo;
-        Some(icon::tray_icon(true))
+        self.tray_shown = ShownIcon::Theme(playing);
+        Some(if playing {
+            icon::playing_icon()
+        } else {
+            icon::idle_icon()
+        })
     }
 }
 
