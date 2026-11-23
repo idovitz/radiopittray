@@ -1,7 +1,62 @@
-//! Procedurally drawn tray/window icon: the RadioPit logo (radio waves +
-//! dot). No binary assets needed.
+//! Tray/window icons. The idle tray icon is the icon theme's "radio"
+//! icon — the same icon the .desktop entry references — so the tray and
+//! the app menu match. Everything else (window icon, playing fallback)
+//! is the procedurally drawn RadioPit logo (radio waves + dot). No
+//! binary assets needed.
 
 pub const ICON_SIZE: u32 = 64;
+
+/// Idle tray icon: the theme's "radio" icon, or the procedural logo when
+/// the icon theme has no such icon.
+pub fn idle_icon() -> tray_icon::Icon {
+    theme_radio_icon().unwrap_or_else(|| tray_icon(false))
+}
+
+/// The "radio" icon from the icon theme, at `ICON_SIZE`.
+#[cfg(target_os = "linux")]
+fn theme_radio_icon() -> Option<tray_icon::Icon> {
+    use gtk::prelude::*;
+    let theme = gtk::IconTheme::default()?;
+    let pb = theme
+        .load_icon("radio", ICON_SIZE as i32, gtk::IconLookupFlags::FORCE_SIZE)
+        .ok()
+        .flatten()?;
+    let rgba = pixbuf_to_rgba(&pb)?;
+    tray_icon::Icon::from_rgba(rgba, ICON_SIZE, ICON_SIZE).ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn theme_radio_icon() -> Option<tray_icon::Icon> {
+    None
+}
+
+/// Copy a pixbuf (RGB or RGBA, arbitrary rowstride) to tightly packed
+/// RGBA8.
+#[cfg(target_os = "linux")]
+fn pixbuf_to_rgba(pb: &gtk::gdk_pixbuf::Pixbuf) -> Option<Vec<u8>> {
+    let w = pb.width() as usize;
+    let h = pb.height() as usize;
+    let stride = pb.rowstride() as usize;
+    let channels = pb.n_channels() as usize;
+    if w == 0 || h == 0 || (channels != 3 && channels != 4) {
+        return None;
+    }
+    let px = pb.read_pixel_bytes();
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h {
+        let src = y * stride;
+        let dst = y * w * 4;
+        for x in 0..w {
+            let s = src + x * channels;
+            let d = dst + x * 4;
+            rgba[d] = px[s];
+            rgba[d + 1] = px[s + 1];
+            rgba[d + 2] = px[s + 2];
+            rgba[d + 3] = if pb.has_alpha() { px[s + 3] } else { 255 };
+        }
+    }
+    Some(rgba)
+}
 
 /// Draws the RadioPit logo as RGBA.
 ///
