@@ -6,9 +6,10 @@ See `README.md` for human-facing docs (installation, usage, configuration).
 
 ## Setup
 
-- System deps (Arch / CachyOS):
-  `sudo pacman -S gtk3 gstreamer gst-plugins-base gst-plugins-good gst-libav libayatana-appindicator xdg-utils`
-  The build links against these; without them it fails at the link step.
+- System deps: GTK 3/GLib, GStreamer (base + good plugin sets + libav),
+  a StatusNotifierItem tray backend (e.g. libayatana-appindicator),
+  and `xdg-open`. The build links against these; without them it fails
+  at the link step.
 
 ## Build & test
 
@@ -39,8 +40,6 @@ See `README.md` for human-facing docs (installation, usage, configuration).
   style.
 - `tray-icon` is intentionally built without default features (no `libxdo`)
   — don't re-enable them unless truly needed.
-- After a release: update `pkg/arch/PKGBUILD` (`pkgver` + `_commit`) and
-  `pkg/debian/build.sh` (`_version` + `_commit`, plus a `changelog` entry).
 
 ## Security
 

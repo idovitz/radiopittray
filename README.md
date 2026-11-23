@@ -9,53 +9,24 @@ as a separate process and closes again. Audio is played through GStreamer;
 track titles/artists come from the stream's ICY metadata. You edit your
 stations on radiopit.fm itself — this little app needs no editor.
 
-## Required system packages
+> **Vibe-coded:** this app was written with AI assistance.
 
-Arch / CachyOS:
+## Dependencies
 
-```sh
-sudo pacman -S gtk3 gstreamer gst-plugins-base gst-plugins-good \
-  gst-libav libayatana-appindicator xdg-utils
-```
-
-(`libayatana-appindicator` is the tray backend: the icon and menu go through
-StatusNotifierItem/DBusMenu. On plain Arch the GStreamer plugin packages are
-named `gstreamer-plugins-base` / `gstreamer-plugins-good` /
-`gstreamer-libav`.)
+- A recent Rust toolchain (`rustc` + `cargo`)
+- GTK 3 / GLib
+- GStreamer with the base and good plugin sets, plus the libav plugins
+  (codec coverage for whatever the streams throw at the player)
+- A StatusNotifierItem-capable tray backend (e.g. libayatana-appindicator)
+- `xdg-open` (xdg-utils) for the "Open radiopit.fm" menu item
 
 ## Building
-
-Manual:
 
 ```sh
 cargo build --release
 ```
 
 The binary ends up in `target/release/radiopittray`.
-
-As a pacman package (see `pkg/arch/`):
-
-```sh
-cd pkg/arch
-makepkg
-sudo pacman -U radiopittray-0.1.0-2-x86_64.pkg.tar.zst
-```
-
-The PKGBUILD builds from the local git checkout at a pinned commit; after a
-new release, update `pkgver` and `_commit` (see the comments in
-`pkg/arch/PKGBUILD`).
-
-As a Debian package (see `pkg/debian/`), for Debian and its derivatives:
-
-```sh
-cd pkg/debian
-./build.sh
-sudo dpkg -i radiopittray_0.1.0_amd64.deb
-```
-
-`build.sh` does the same as the PKGBUILD: it builds from the local git
-checkout at a pinned commit. After a new release, bump `_version` and
-`_commit` in `build.sh` and add a `changelog` entry.
 
 ## Usage
 
