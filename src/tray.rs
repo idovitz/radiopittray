@@ -396,7 +396,7 @@ impl TrayApp {
         if let Some(b) = bytes {
             match image::load_from_memory(&b) {
                 Ok(img) => {
-                    let rgba = resize_rgba32(&img);
+                    let rgba = icon::resize_square(&img, 32).into_raw();
                     if let Some(ic) = icon::tray_icon_from_rgba(rgba.clone()) {
                         self.tray_icon_cache.insert(sid.to_string(), rgba);
                         self.tray_shown = ShownIcon::Station(sid.to_string());
@@ -425,7 +425,7 @@ impl TrayApp {
             s.icon_fetch_for = Some(url.clone());
             let shared = self.shared.clone();
             self.handle.spawn(async move {
-                match fetch_icon_bytes(&url).await {
+                match icon::fetch_icon_bytes(&url).await {
                     Ok(b) => {
                         let mut s = shared.lock().unwrap();
                         s.icon_bytes = Some((url.clone(), b));
@@ -499,91 +499,6 @@ fn acquire_tray_lock() -> Option<File> {
         Some(file)
     } else {
         None
-    }
-}
-
-/// Decode an image and fit it into a 32×32 RGBA canvas, preserving the
-/// aspect ratio (station icons are not always square; `resize` alone would
-/// return e.g. 32×18 for a landscape icon, which the PNG writer then
-/// rejects because the buffer no longer matches the declared size).
-fn resize_rgba32(img: &image::DynamicImage) -> Vec<u8> {
-    let scaled = img.resize(32, 32, image::imageops::FilterType::Lanczos3);
-    let mut out = image::RgbaImage::new(32, 32);
-    let x = (32 - scaled.width()) as i64 / 2;
-    let y = (32 - scaled.height()) as i64 / 2;
-    image::imageops::overlay(&mut out, &scaled.to_rgba8(), x, y);
-    out.into_raw()
-}
-
-/// Fetch an icon URL without the API key header.
-async fn fetch_icon_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
-    let url = fetch_icon_url(url);
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("radiopittray/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-    let resp = client.get(&url).send().await?.error_for_status()?;
-    Ok(resp.bytes().await?.to_vec())
-}
-
-/// Wikimedia only serves thumbnails in a fixed set of sizes (640px is not
-/// one of them — it answers 400) — rewrite the requested size to 120px,
-/// which is allowed and still well above the 32×32 tray icon.
-fn fetch_icon_url(url: &str) -> String {
-    let (prefix, rest) = match url.rsplit_once('/') {
-        Some((p, r)) => (p, r),
-        None => return url.to_string(),
-    };
-    let (size, file) = match rest.split_once("px-") {
-        Some((s, f)) if s.parse::<u32>().is_ok() => (s, f),
-        _ => return url.to_string(),
-    };
-    if size == "120" || !prefix.contains("wikimedia.org") || !prefix.contains("/thumb/") {
-        return url.to_string();
-    }
-    format!("{prefix}/120px-{file}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rewrites_wikimedia_thumbnail_size() {
-        let url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/da/NPO_Radio_1_logo_2014.svg/640px-NPO_Radio_1_logo_2014.svg.png";
-        assert_eq!(
-            fetch_icon_url(url),
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/da/NPO_Radio_1_logo_2014.svg/120px-NPO_Radio_1_logo_2014.svg.png"
-        );
-    }
-
-    #[test]
-    fn leaves_other_urls_alone() {
-        let url = "https://example.com/icon/640px-foo.png";
-        assert_eq!(fetch_icon_url(url), url);
-        let url = "https://upload.wikimedia.org/wikipedia/commons/foo.png";
-        assert_eq!(fetch_icon_url(url), url);
-    }
-
-    /// Station icons are not always square (e.g. Radio Capelle's is 128×71);
-    /// the result must always be an exact 32×32 RGBA buffer, centered.
-    #[test]
-    fn resizes_non_square_icons_to_full_32x32() {
-        let img = image::DynamicImage::new_rgb8(128, 71);
-        let rgba = resize_rgba32(&img);
-        assert_eq!(rgba.len(), 32 * 32 * 4);
-        // Landscape icon: letterboxed, so the top row stays transparent.
-        let top = &rgba[..32 * 4];
-        assert!(top.iter().all(|&b| b == 0));
-        // The middle row has content.
-        let mid = &rgba[(16 * 32) * 4..(16 * 32 + 32) * 4];
-        assert!(mid.iter().any(|&b| b > 0));
-        // A square icon fills the whole canvas.
-        let sq: image::DynamicImage =
-            image::RgbImage::from_pixel(64, 64, image::Rgb([200, 100, 50])).into();
-        let rgba = resize_rgba32(&sq);
-        assert_eq!(rgba.len(), 32 * 32 * 4);
-        assert!(rgba.iter().all(|&b| b > 0));
     }
 }
 

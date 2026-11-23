@@ -19,6 +19,11 @@ pub struct Config {
     pub last_station_id: Option<String>,
     /// Write/remove an autostart entry.
     pub autostart: bool,
+    /// Show a desktop notification when a new track starts.
+    pub notify_new_track: bool,
+    /// How long that notification stays up, in seconds (0 = until
+    /// dismissed).
+    pub notify_duration_secs: u32,
 }
 
 impl Default for Config {
@@ -29,6 +34,8 @@ impl Default for Config {
             volume: 0.8,
             last_station_id: None,
             autostart: false,
+            notify_new_track: true,
+            notify_duration_secs: 10,
         }
     }
 }
@@ -97,10 +104,24 @@ mod tests {
         let mut c = Config::default();
         c.api_key = "test-key-123".into();
         c.volume = 0.42;
+        c.notify_new_track = false;
+        c.notify_duration_secs = 30;
         let s = toml::to_string(&c).unwrap();
         let d: Config = toml::from_str(&s).unwrap();
         assert_eq!(d.api_key, "test-key-123");
         assert!((d.volume - 0.42).abs() < f64::EPSILON);
         assert_eq!(d.api_url, DEFAULT_API_URL);
+        assert!(!d.notify_new_track);
+        assert_eq!(d.notify_duration_secs, 30);
+    }
+
+    #[test]
+    fn missing_field_defaults_to_notify_on() {
+        // Old config files (written before the option existed) must parse,
+        // with the option on.
+        let d: Config =
+            toml::from_str("api_key = \"k\"\napi_url = \"https://api.radiopit.fm\"\n").unwrap();
+        assert!(d.notify_new_track);
+        assert_eq!(d.notify_duration_secs, 10);
     }
 }

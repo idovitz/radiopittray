@@ -22,6 +22,11 @@ struct UiState {
     error: Option<String>,
     /// Whether "start at login" is enabled (mirrors the config).
     autostart: bool,
+    /// Whether new tracks raise a desktop notification (mirrors the config).
+    notify_new_track: bool,
+    /// How long such a notification stays up, in seconds (mirrors the
+    /// config).
+    notify_duration_secs: u32,
     /// Set once the key has been saved; the window closes itself.
     saved: bool,
 }
@@ -184,6 +189,46 @@ fn draw_key_view(
         ctx.request_repaint();
     }
 
+    // -- New track notifications ---------------------------------------------
+    let mut notify = state.lock().unwrap().notify_new_track;
+    if ui.checkbox(&mut notify, "Notify on new track").changed() {
+        if let Err(e) = {
+            let mut conf = config::Config::load();
+            conf.notify_new_track = notify;
+            conf.save()
+        } {
+            let mut s = state.lock().unwrap();
+            s.error = Some(format!("saving config: {e:#}"));
+        } else {
+            state.lock().unwrap().notify_new_track = notify;
+        }
+        ctx.request_repaint();
+    }
+    let mut duration = state.lock().unwrap().notify_duration_secs;
+    let duration_resp = ui.horizontal(|ui| {
+        ui.label("Notification duration");
+        let resp = ui.add(
+            egui::DragValue::new(&mut duration)
+                .range(0..=3600)
+                .suffix(" s"),
+        );
+        ui.label("(0 = until dismissed)");
+        resp
+    });
+    if duration_resp.inner.changed() {
+        if let Err(e) = {
+            let mut conf = config::Config::load();
+            conf.notify_duration_secs = duration;
+            conf.save()
+        } {
+            let mut s = state.lock().unwrap();
+            s.error = Some(format!("saving config: {e:#}"));
+        } else {
+            state.lock().unwrap().notify_duration_secs = duration;
+        }
+        ctx.request_repaint();
+    }
+
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
         let resp = ui.add_enabled(!loading, egui::Button::new("Save"));
         if resp.clicked() {
@@ -233,6 +278,8 @@ pub fn run() -> anyhow::Result<()> {
         loading: false,
         error: None,
         autostart: conf.autostart,
+        notify_new_track: conf.notify_new_track,
+        notify_duration_secs: conf.notify_duration_secs,
         saved: false,
     }));
 

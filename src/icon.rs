@@ -180,6 +180,49 @@ pub fn tray_icon_from_rgba(rgba: Vec<u8>) -> Option<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(rgba, 32, 32).ok()
 }
 
+/// Fetch an icon URL without the API key header.
+pub async fn fetch_icon_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
+    let url = fetch_icon_url(url);
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("radiopittray/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let resp = client.get(&url).send().await?.error_for_status()?;
+    Ok(resp.bytes().await?.to_vec())
+}
+
+/// Wikimedia only serves thumbnails in a fixed set of sizes (640px is not
+/// one of them — it answers 400) — rewrite the requested size to 120px,
+/// which is allowed and still well above the 32×32 tray icon.
+pub fn fetch_icon_url(url: &str) -> String {
+    let (prefix, rest) = match url.rsplit_once('/') {
+        Some((p, r)) => (p, r),
+        None => return url.to_string(),
+    };
+    let (size, file) = match rest.split_once("px-") {
+        Some((s, f)) if s.parse::<u32>().is_ok() => (s, f),
+        _ => return url.to_string(),
+    };
+    if size == "120" || !prefix.contains("wikimedia.org") || !prefix.contains("/thumb/") {
+        return url.to_string();
+    }
+    format!("{prefix}/120px-{file}")
+}
+
+/// Fit an image into a `size`×`size` RGBA canvas, preserving the aspect
+/// ratio. Station icons are not always square (and `resize` alone would
+/// return e.g. 32×18 for a landscape icon, which the PNG writer then
+/// rejects because the buffer no longer matches the declared size), so
+/// the result is centered on a transparent canvas.
+pub fn resize_square(img: &image::DynamicImage, size: u32) -> image::RgbaImage {
+    let scaled = img.resize(size, size, image::imageops::FilterType::Lanczos3);
+    let mut out = image::RgbaImage::new(size, size);
+    let x = size.saturating_sub(scaled.width()) / 2;
+    let y = size.saturating_sub(scaled.height()) / 2;
+    image::imageops::overlay(&mut out, &scaled.to_rgba8(), x as i64, y as i64);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,5 +236,44 @@ mod tests {
         // Dot area should be opaque at the center.
         let center = ((42 * ICON_SIZE + 32) * 4) as usize;
         assert!(px[center + 3] > 0);
+    }
+
+    #[test]
+    fn rewrites_wikimedia_thumbnail_size() {
+        let url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/da/NPO_Radio_1_logo_2014.svg/640px-NPO_Radio_1_logo_2014.svg.png";
+        assert_eq!(
+            fetch_icon_url(url),
+            "https://upload.wikimedia.org/wikipedia/commons/thumb/d/da/NPO_Radio_1_logo_2014.svg/120px-NPO_Radio_1_logo_2014.svg.png"
+        );
+    }
+
+    #[test]
+    fn leaves_other_urls_alone() {
+        let url = "https://example.com/icon/640px-foo.png";
+        assert_eq!(fetch_icon_url(url), url);
+        let url = "https://upload.wikimedia.org/wikipedia/commons/foo.png";
+        assert_eq!(fetch_icon_url(url), url);
+    }
+
+    /// Station icons are not always square (e.g. Radio Capelle's is 128×71);
+    /// the result must always be an exact `size`×`size` RGBA buffer,
+    /// centered.
+    #[test]
+    fn resizes_non_square_icons_to_full_square() {
+        let img = image::DynamicImage::new_rgb8(128, 71);
+        let rgba = resize_square(&img, 32);
+        assert_eq!(rgba.as_raw().len(), 32 * 32 * 4);
+        // Landscape icon: letterboxed, so the top row stays transparent.
+        let top = &rgba.as_raw()[..32 * 4];
+        assert!(top.iter().all(|&b| b == 0));
+        // The middle row has content.
+        let mid = &rgba.as_raw()[(16 * 32) * 4..(16 * 32 + 32) * 4];
+        assert!(mid.iter().any(|&b| b > 0));
+        // A square icon fills the whole canvas.
+        let sq: image::DynamicImage =
+            image::RgbImage::from_pixel(64, 64, image::Rgb([200, 100, 50])).into();
+        let rgba = resize_square(&sq, 32);
+        assert_eq!(rgba.as_raw().len(), 32 * 32 * 4);
+        assert!(rgba.as_raw().iter().all(|&b| b > 0));
     }
 }

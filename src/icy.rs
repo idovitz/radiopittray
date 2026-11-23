@@ -15,6 +15,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::notify::{self, NowPlaying};
 use crate::state::Shared;
 
 /// Commands for the ICY task.
@@ -279,16 +280,43 @@ fn parse_stream_title(raw: &[u8]) -> Option<(Option<String>, String)> {
 }
 
 /// Store the metadata in the shared state and trigger a menu rebuild
-/// (the tray's main loop picks it up on its next tick).
+/// (the tray's main loop picks it up on its next tick). When the
+/// (artist, title) pair actually changed, the "new track" notification
+/// is queued as well (if enabled in the config).
 fn set_info(
     shared: &Arc<Mutex<Shared>>,
     artist: Option<String>,
     title: Option<String>,
 ) {
-    let mut s = shared.lock().unwrap();
-    s.icy_artist = artist;
-    s.icy_title = title;
-    s.menu_dirty = true;
+    let now_playing = {
+        let mut s = shared.lock().unwrap();
+        let changed =
+            (artist.as_ref(), title.as_ref()) != (s.icy_artist.as_ref(), s.icy_title.as_ref());
+        let notify = if changed && s.config.notify_new_track {
+            s.current.as_ref().and_then(|st| {
+                title.as_ref().map(|t| NowPlaying {
+                    station: Some(st.name.clone()),
+                    artist: artist.clone(),
+                    title: t.clone(),
+                    icon_url: st.icon_url.clone(),
+                    duration_secs: s.config.notify_duration_secs,
+                })
+            })
+        } else {
+            None
+        };
+        s.icy_artist = artist;
+        s.icy_title = title;
+        s.menu_dirty = true;
+        notify
+    };
+    if let Some(np) = now_playing {
+        // Fire and forget: the icon fetch + D-Bus call must not stall
+        // the metadata stream.
+        tokio::task::spawn(async move {
+            notify::show(np).await;
+        });
+    }
 }
 
 #[cfg(test)]

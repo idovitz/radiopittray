@@ -13,6 +13,11 @@ egui = "0.29"
 gstreamer = "0.23"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 libc = "0.2"
+# `images` zou de default-features (rayon, alle formaten) van `image`
+# aanzetten; de lichte variant volstaat, want `image` boven levert al
+# png/jpeg/webp. `async` is nodig: de sync `show()` roept zbus' `block_on`
+# aan, wat panict als het vanuit een tokio-taak komt.
+notify-rust = { version = "4", features = ["images_no_default_features", "async"] }
 open = "5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }

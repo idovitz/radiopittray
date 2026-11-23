@@ -47,8 +47,9 @@ The binary ends up in `target/release/radiopittray`.
    playing (or the icon is missing) it shows the RadioPit logo. The tooltip
    shows the current station.
 4. The configuration screen (Configuration…) is a separate window: there you
-   set the key (Connect/Save validates and stores it) and the *Start at
-   login* checkbox. The window closes itself once the key has been saved.
+   set the key (Connect/Save validates and stores it), the *Start at login*
+   checkbox and the *Notify on new track* checkbox. The window closes itself
+   once the key has been saved.
 5. Quitting is only possible via *Quit* in the menu (or Ctrl+C). At most one
    tray process can run; a second start exits with "already running".
 
@@ -62,11 +63,21 @@ api_url = "https://api.radiopit.fm"
 volume = 0.8
 last_station_id = null
 autostart = false
+notify_new_track = true
+notify_duration_secs = 10
 ```
 
 `last_station_id` is updated on every playback and determines where
 *Play stream* plays to. `autostart` writes/removes
-`~/.config/autostart/radiopittray.desktop`.
+`~/.config/autostart/radiopittray.desktop`. `notify_new_track` shows a
+desktop notification (XDG `org.freedesktop.Notifications`, as rendered
+by GNOME, Plasma, …) whenever a new track starts: the station icon,
+the station name, the artist and the track title. `notify_duration_secs`
+is how long it stays up (default 10; 0 keeps it on screen until you
+dismiss it). It only triggers on
+a track that actually changed, so ICY streams that repeat a title do
+not spam, and no notification appears when the stream does not provide
+metadata.
 
 ## Tests
 

@@ -15,6 +15,7 @@ mod configui;
 mod icon;
 mod icy;
 mod menu;
+mod notify;
 mod player;
 mod state;
 mod tray;
