@@ -9,7 +9,7 @@ pub const ICON_SIZE: u32 = 64;
 /// Center of the antenna tip and radius of the green ball in the theme's
 /// "radio" icon (the top-left end of the diagonal antenna).
 const ANTENNA_TIP: (u32, u32) = (11, 9);
-const ANTENNA_DOT_R: f32 = 3.0;
+const ANTENNA_DOT_R: f32 = 6.0;
 
 /// Idle tray icon: the theme's "radio" icon, or the procedural logo when
 /// the icon theme has no such icon.
