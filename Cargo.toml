@@ -3,7 +3,7 @@ name = "radiopittray"
 version = "0.1.0"
 edition = "2021"
 description = "System tray radio player for your RadioPit.fm library"
-license = "MIT"
+license = "GPL-3.0"
 
 [dependencies]
 anyhow = "1"
