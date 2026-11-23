@@ -339,7 +339,9 @@ impl TrayApp {
             (tooltip, want, playing)
         };
         if let Some(ic) = self.next_tray_icon(want, playing) {
-            let _ = self.tray.set_icon(Some(ic));
+            if let Err(e) = self.tray.set_icon(Some(ic)) {
+                tracing::warn!("updating tray icon: {e:#}");
+            }
         }
         let _ = self.tray.set_tooltip(Some(tooltip));
     }
@@ -500,12 +502,17 @@ fn acquire_tray_lock() -> Option<File> {
     }
 }
 
-/// Decode an image and resize it to 32×32 RGBA.
+/// Decode an image and fit it into a 32×32 RGBA canvas, preserving the
+/// aspect ratio (station icons are not always square; `resize` alone would
+/// return e.g. 32×18 for a landscape icon, which the PNG writer then
+/// rejects because the buffer no longer matches the declared size).
 fn resize_rgba32(img: &image::DynamicImage) -> Vec<u8> {
-    img.resize(32, 32, image::imageops::FilterType::Lanczos3)
-        .to_rgba8()
-        .as_raw()
-        .to_vec()
+    let scaled = img.resize(32, 32, image::imageops::FilterType::Lanczos3);
+    let mut out = image::RgbaImage::new(32, 32);
+    let x = (32 - scaled.width()) as i64 / 2;
+    let y = (32 - scaled.height()) as i64 / 2;
+    image::imageops::overlay(&mut out, &scaled.to_rgba8(), x, y);
+    out.into_raw()
 }
 
 /// Fetch an icon URL without the API key header.
@@ -556,6 +563,27 @@ mod tests {
         assert_eq!(fetch_icon_url(url), url);
         let url = "https://upload.wikimedia.org/wikipedia/commons/foo.png";
         assert_eq!(fetch_icon_url(url), url);
+    }
+
+    /// Station icons are not always square (e.g. Radio Capelle's is 128×71);
+    /// the result must always be an exact 32×32 RGBA buffer, centered.
+    #[test]
+    fn resizes_non_square_icons_to_full_32x32() {
+        let img = image::DynamicImage::new_rgb8(128, 71);
+        let rgba = resize_rgba32(&img);
+        assert_eq!(rgba.len(), 32 * 32 * 4);
+        // Landscape icon: letterboxed, so the top row stays transparent.
+        let top = &rgba[..32 * 4];
+        assert!(top.iter().all(|&b| b == 0));
+        // The middle row has content.
+        let mid = &rgba[(16 * 32) * 4..(16 * 32 + 32) * 4];
+        assert!(mid.iter().any(|&b| b > 0));
+        // A square icon fills the whole canvas.
+        let sq: image::DynamicImage =
+            image::RgbImage::from_pixel(64, 64, image::Rgb([200, 100, 50])).into();
+        let rgba = resize_rgba32(&sq);
+        assert_eq!(rgba.len(), 32 * 32 * 4);
+        assert!(rgba.iter().all(|&b| b > 0));
     }
 }
 
