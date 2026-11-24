@@ -28,6 +28,7 @@ use crate::icon;
 use crate::menu;
 use crate::player::{self, Cmd, Ev};
 use crate::state::{Playback, Shared};
+use crate::urls;
 
 /// What the tray icon currently shows.
 #[derive(Clone, PartialEq, Debug)]
@@ -176,6 +177,18 @@ impl TrayApp {
     /// Play the given station (station button, or the "Play stream" line).
     /// Remembers it as the last played station and starts ICY metadata.
     fn play_station(&mut self, station: Station) {
+        // A station URL points at bytes the app downloads and decodes
+        // (playbin and the ICY connection). Refuse anything that is not
+        // a plain public http(s) stream: no file://, no local or private
+        // addresses (SSRF guard, see urls.rs).
+        if let Err(e) = urls::validate(&station.url) {
+            tracing::warn!("refusing to play {:?}: {e:#}", station.name);
+            let mut s = self.shared.lock().unwrap();
+            s.playback = Playback::Stopped;
+            s.playback_error = Some(format!("stream URL refused: {e}"));
+            s.menu_dirty = true;
+            return;
+        }
         if let Err(e) = self.cmd_tx.send(Cmd::Play(station.clone())) {
             tracing::warn!("player thread gone: {e}");
             return;
@@ -394,8 +407,8 @@ impl TrayApp {
             }
         };
         if let Some(b) = bytes {
-            match image::load_from_memory(&b) {
-                Ok(img) => {
+            match icon::load_icon_image(&b) {
+                Some(img) => {
                     let rgba = icon::resize_square(&img, 32).into_raw();
                     if let Some(ic) = icon::tray_icon_from_rgba(rgba.clone()) {
                         self.tray_icon_cache.insert(sid.to_string(), rgba);
@@ -403,8 +416,8 @@ impl TrayApp {
                         return Some(ic);
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("decoding station icon: {e}");
+                None => {
+                    tracing::warn!("decoding station icon failed (bad format or too large)");
                     // The bytes are consumed; don't re-fetch them every frame.
                     let mut s = self.shared.lock().unwrap();
                     s.icon_failed_for = Some(url.to_string());
@@ -490,9 +503,8 @@ pub fn run() -> anyhow::Result<()> {
 /// Single-instance guard: two tray processes would register the same
 /// StatusNotifierItem id and show duplicate tray icons.
 fn acquire_tray_lock() -> Option<File> {
-    let dir = dirs::config_dir()?;
-    let path = dir.join("radiopittray").join("tray.lock");
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or(&dir));
+    let dir = config::ensure_config_dir();
+    let path = dir.join("tray.lock");
     let file = std::fs::OpenOptions::new().create(true).write(true).open(&path).ok()?;
     let ok = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if ok == 0 {

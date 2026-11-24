@@ -47,6 +47,26 @@ pub fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// The app's config directory, created if missing and locked down to
+/// owner-only (0700). It holds `config.toml` (with the RadioPit API key)
+/// and the single-instance lock files; the default 0755/0644 would let
+/// other local users read — and with the key, edit — the library, which
+/// is how a local user could point stations at malicious stream URLs.
+pub fn ensure_config_dir() -> PathBuf {
+    let dir = config_path().parent().expect("config path has a parent").to_path_buf();
+    let _ = std::fs::create_dir_all(&dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&dir) {
+            if meta.permissions().mode() & 0o7777 != 0o700 {
+                let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+    }
+    dir
+}
+
 impl Config {
     pub fn load() -> Self {
         let path = config_path();
@@ -60,14 +80,21 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let path = config_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).context("creating config dir")?;
-        }
+        let dir = ensure_config_dir();
+        let path = dir.join("config.toml");
         let s = toml::to_string_pretty(self).context("serializing config")?;
         std::fs::write(&path, s).with_context(|| format!("writing {}", path.display()))?;
+        #[cfg(unix)]
+        set_owner_only(&path);
         Ok(())
     }
+}
+
+/// The key file must be owner-only (0600) on multi-user systems.
+#[cfg(unix)]
+fn set_owner_only(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
 }
 
 const AUTOSTART_DESKTOP: &str = "\
@@ -123,5 +150,21 @@ mod tests {
             toml::from_str("api_key = \"k\"\napi_url = \"https://api.radiopit.fm\"\n").unwrap();
         assert!(d.notify_new_track);
         assert_eq!(d.notify_duration_secs, 10);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_file_is_written_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("radiopittray-perm-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("perm.toml");
+        std::fs::write(&path, "x").unwrap();
+        // Simulate an old, world-readable file and restore owner-only.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        set_owner_only(&path);
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

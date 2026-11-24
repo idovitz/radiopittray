@@ -180,15 +180,52 @@ pub fn tray_icon_from_rgba(rgba: Vec<u8>) -> Option<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(rgba, 32, 32).ok()
 }
 
-/// Fetch an icon URL without the API key header.
+/// Upper bound for a station icon download. Icons are 32×32 in the tray
+/// and 128×128 in notifications; a bigger payload is a mistake (or an
+/// attack) and is cut off before it can exhaust memory.
+pub const MAX_ICON_BYTES: usize = 8 * 1024 * 1024;
+
+/// Upper bound for the decoded pixel count: a compressed image can
+/// expand far beyond its download size (decompression bomb).
+pub const MAX_ICON_PIXELS: u32 = 4096 * 4096;
+
+/// Fetch an icon URL without the API key header. The URL is validated
+/// (public http(s) only, see `crate::urls`) and the download is capped
+/// at `MAX_ICON_BYTES`.
 pub async fn fetch_icon_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
     let url = fetch_icon_url(url);
+    crate::urls::validate(&url)?;
     let client = reqwest::Client::builder()
         .user_agent(concat!("radiopittray/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(10))
+        .redirect(crate::urls::safe_redirect_policy())
         .build()?;
-    let resp = client.get(&url).send().await?.error_for_status()?;
-    Ok(resp.bytes().await?.to_vec())
+    let mut resp = client.get(&url).send().await?.error_for_status()?;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        buf.extend_from_slice(&chunk);
+        if buf.len() > MAX_ICON_BYTES {
+            anyhow::bail!("icon download is larger than {MAX_ICON_BYTES} bytes; ignoring it");
+        }
+    }
+    Ok(buf)
+}
+
+/// Decode fetched icon bytes, refusing images whose pixel count exceeds
+/// `MAX_ICON_PIXELS`. Used by both the tray icon and the notification
+/// image, so the size cap applies to every decode of remote bytes.
+pub fn load_icon_image(bytes: &[u8]) -> Option<image::DynamicImage> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let pixels = img.width().saturating_mul(img.height());
+    if pixels > MAX_ICON_PIXELS {
+        tracing::warn!(
+            "icon image too large: {}x{} (> {MAX_ICON_PIXELS} pixels)",
+            img.width(),
+            img.height()
+        );
+        return None;
+    }
+    Some(img)
 }
 
 /// Wikimedia only serves thumbnails in a fixed set of sizes (640px is not
@@ -253,6 +290,26 @@ mod tests {
         assert_eq!(fetch_icon_url(url), url);
         let url = "https://upload.wikimedia.org/wikipedia/commons/foo.png";
         assert_eq!(fetch_icon_url(url), url);
+    }
+
+    #[test]
+    fn loads_small_and_refuses_oversized_decoded_images() {
+        use std::io::Cursor;
+
+        fn png_bytes(w: u32, h: u32) -> Vec<u8> {
+            let img: image::RgbaImage =
+                image::RgbaImage::from_pixel(w, h, image::Rgba([255, 0, 0, 255]));
+            let mut buf: Vec<u8> = Vec::new();
+            image::DynamicImage::ImageRgba8(img)
+                .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Png)
+                .unwrap();
+            buf
+        }
+
+        assert!(load_icon_image(&png_bytes(16, 16)).is_some());
+        // 4097×4097 exceeds MAX_ICON_PIXELS (4096²): a decompression
+        // bomb must be refused, not decoded into gigabytes.
+        assert!(load_icon_image(&png_bytes(4097, 4097)).is_none());
     }
 
     /// Station icons are not always square (e.g. Radio Capelle's is 128×71);

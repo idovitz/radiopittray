@@ -251,9 +251,8 @@ fn open_url(url: &str) {
 
 /// Single-instance lock, so "Change key…" twice does not open two windows.
 fn acquire_lock() -> Option<File> {
-    let dir = dirs::config_dir()?;
-    let path = dir.join("radiopittray").join("config-window.lock");
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or(&dir));
+    let dir = config::ensure_config_dir();
+    let path = dir.join("config-window.lock");
     let file = std::fs::OpenOptions::new().create(true).write(true).open(&path).ok()?;
     let ok = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if ok == 0 {

@@ -29,6 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # default-features uit: `libxdo` (xdotool-achtige key sequences voor de
 # vooraf gedefinieerde Copy/Cut/Paste items) gebruiken we niet.
 tray-icon = { version = "0.19", default-features = false }
+url = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 glib = "0.18"

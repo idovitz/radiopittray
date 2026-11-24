@@ -111,6 +111,7 @@ async fn track_once(url: &str, shared: &Arc<Mutex<Shared>>) -> TrackResult {
     let client = reqwest::Client::builder()
         .user_agent(concat!("radiopittray/", env!("CARGO_PKG_VERSION")))
         // No overall timeout: this is a long-lived connection.
+        .redirect(crate::urls::safe_redirect_policy())
         .build()
         .expect("http client");
 

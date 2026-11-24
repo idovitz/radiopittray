@@ -64,9 +64,8 @@ pub async fn show(np: NowPlaying) {
 /// fetch + decode succeeds.
 async fn station_image(url: Option<&str>) -> Option<image::RgbaImage> {
     let bytes = icon::fetch_icon_bytes(url?).await.ok()?;
-    image::load_from_memory(&bytes)
-        .ok()
-        .map(|im| icon::resize_square(&im, ICON_SIZE))
+    let img = icon::load_icon_image(&bytes)?;
+    Some(icon::resize_square(&img, ICON_SIZE))
 }
 
 /// The (summary, body) texts of the notification: the station name is

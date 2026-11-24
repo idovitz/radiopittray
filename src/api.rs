@@ -10,6 +10,8 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::time::Duration;
 
+use crate::urls;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Playlist {
     #[serde(rename = "_id")]
@@ -69,9 +71,22 @@ pub struct Client {
 
 impl Client {
     pub fn new(api_url: &str) -> Self {
+        if let Ok(u) = url::Url::parse(api_url) {
+            if u.scheme() == "http" {
+                tracing::warn!(
+                    "api_url {api_url} uses plain http: the RadioPit key \
+                     is sent unencrypted"
+                );
+            }
+        }
         let http = reqwest::Client::builder()
             .user_agent(concat!("radiopittray/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(20))
+            // reqwest only strips Authorization/Cookie on cross-host
+            // redirects — not our custom x-api-key header — so a
+            // compromised API server could leak the key via a redirect.
+            // The same guard applies here as to stream/icon URLs.
+            .redirect(urls::safe_redirect_policy())
             .build()
             .expect("http client");
         let base = api_url.trim_end_matches('/').to_string();

@@ -19,6 +19,7 @@ mod notify;
 mod player;
 mod state;
 mod tray;
+mod urls;
 
 fn main() {
     tracing_subscriber::fmt()
