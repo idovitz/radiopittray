@@ -27,6 +27,8 @@ struct UiState {
     /// How long such a notification stays up, in seconds (mirrors the
     /// config).
     notify_duration_secs: u32,
+    /// Whether other devices may control this player (mirrors the config).
+    allow_remote_control: bool,
     /// Set once the key has been saved; the window closes itself.
     saved: bool,
 }
@@ -229,6 +231,28 @@ fn draw_key_view(
         ctx.request_repaint();
     }
 
+    // -- Remote control -------------------------------------------------------
+    ui.separator();
+    ui.label("Remote control via radiopit.fm");
+    ui.label(
+        "When off, the web/Android apps can no longer control this player \
+         (it still lists and controls them).",
+    );
+    let mut allow_remote = state.lock().unwrap().allow_remote_control;
+    if ui.checkbox(&mut allow_remote, "Allow remote control").changed() {
+        if let Err(e) = {
+            let mut conf = config::Config::load();
+            conf.allow_remote_control = allow_remote;
+            conf.save()
+        } {
+            let mut s = state.lock().unwrap();
+            s.error = Some(format!("saving config: {e:#}"));
+        } else {
+            state.lock().unwrap().allow_remote_control = allow_remote;
+        }
+        ctx.request_repaint();
+    }
+
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
         let resp = ui.add_enabled(!loading, egui::Button::new("Save"));
         if resp.clicked() {
@@ -279,6 +303,7 @@ pub fn run() -> anyhow::Result<()> {
         autostart: conf.autostart,
         notify_new_track: conf.notify_new_track,
         notify_duration_secs: conf.notify_duration_secs,
+        allow_remote_control: conf.allow_remote_control,
         saved: false,
     }));
 
@@ -323,8 +348,45 @@ pub fn spawn_config_window() {
             return;
         }
     };
-    match std::process::Command::new(exe).arg("--config").spawn() {
+    match std::process::Command::new(config_window_exe(&exe))
+        .arg("--config")
+        .spawn()
+    {
         Ok(_) => tracing::info!("starting config window"),
         Err(e) => tracing::warn!("starting config window: {e}"),
+    }
+}
+
+/// The path to re-exec for the config window. Normally just
+/// `current_exe()`; but if the binary is replaced or deleted while it is
+/// running (an in-place rebuild, a package upgrade), that reports a
+/// `... (deleted)` path that cannot be spawned. On Linux the
+/// `/proc/self/exe` magic link still resolves to the running inode.
+fn config_window_exe(exe: &std::path::Path) -> &std::path::Path {
+    (cfg!(target_os = "linux") && exe.to_string_lossy().ends_with(" (deleted)"))
+        .then(|| std::path::Path::new("/proc/self/exe"))
+        .unwrap_or(exe)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_window_exe;
+    use std::path::Path;
+
+    #[test]
+    fn normal_path_is_kept() {
+        let p = Path::new("/usr/local/bin/radiopittray");
+        assert_eq!(config_window_exe(p), p);
+    }
+
+    #[test]
+    fn deleted_path_falls_back_to_proc_self_exe() {
+        let p = Path::new("/usr/local/bin/radiopittray (deleted)");
+        let got = config_window_exe(p);
+        if cfg!(target_os = "linux") {
+            assert_eq!(got, Path::new("/proc/self/exe"));
+        } else {
+            assert_eq!(got, p);
+        }
     }
 }

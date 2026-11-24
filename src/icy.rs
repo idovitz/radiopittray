@@ -291,7 +291,8 @@ fn parse_stream_title(raw: &[u8]) -> Option<(Option<String>, String)> {
 /// Store the metadata in the shared state and trigger a menu rebuild
 /// (the tray's main loop picks it up on its next tick). When the
 /// (artist, title) pair actually changed, the "new track" notification
-/// is queued as well (if enabled in the config).
+/// is queued as well — if enabled in the config and the play was not
+/// started by a remote command.
 fn set_info(
     shared: &Arc<Mutex<Shared>>,
     artist: Option<String>,
@@ -301,7 +302,9 @@ fn set_info(
         let mut s = shared.lock().unwrap();
         let changed =
             (artist.as_ref(), title.as_ref()) != (s.icy_artist.as_ref(), s.icy_title.as_ref());
-        let notify = if changed && s.config.notify_new_track {
+        // No "new track" notification when playback was started by a remote
+        // command (a phone tap should not raise a desktop notification).
+        let notify = if changed && s.config.notify_new_track && !s.remote_initiated {
             s.current.as_ref().and_then(|st| {
                 title.as_ref().map(|t| NowPlaying {
                     station: Some(st.name.clone()),

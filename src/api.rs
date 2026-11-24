@@ -1,10 +1,11 @@
 //! Minimal client for the RadioPit web API.
 //!
 //! The API is authenticated with an `x-api-key` header (the RadioPit
-//! account key). Two endpoints are used:
+//! account key). Endpoints used:
 //!
-//! - `GET /api/playlists` -> list of playlists
-//! - `GET /api/stations`  -> list of stations (each has a `playlistId`)
+//! - `GET /api/auth/validate` -> `{ valid, userId, playlistToken }`
+//! - `GET /api/playlists`     -> list of playlists
+//! - `GET /api/stations`      -> list of stations (each has a `playlistId`)
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
@@ -137,6 +138,26 @@ impl Client {
         self.get::<Vec<Station>>("/api/stations", api_key)
             .await
             .map(|_| ())
+    }
+
+    /// The account's internal user id, as reported by the auth endpoint.
+    ///
+    /// The remote-control WebSocket authenticates with `{ userId, apiKey }`,
+    /// so the tray needs this id before it can connect (see remote.rs).
+    pub async fn auth_user_id(&self, api_key: &str) -> Result<String> {
+        #[derive(Deserialize)]
+        struct Auth {
+            #[serde(default)]
+            valid: bool,
+            #[serde(default, rename = "userId")]
+            user_id: Option<String>,
+        }
+        let a = self.get::<Auth>("/api/auth/validate", api_key).await?;
+        if !a.valid {
+            return Err(anyhow!("RadioPit key reported as invalid"));
+        }
+        a.user_id
+            .ok_or_else(|| anyhow!("auth response is missing userId"))
     }
 
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str, api_key: &str) -> Result<T> {

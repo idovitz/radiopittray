@@ -17,6 +17,7 @@ mod icy;
 mod menu;
 mod notify;
 mod player;
+mod remote;
 mod state;
 mod tray;
 mod urls;

@@ -29,6 +29,18 @@ See `README.md` for human-facing docs (installation, usage, configuration).
 - Tray: StatusNotifierItem via libappindicator (`src/tray.rs`, `src/menu.rs`).
   The tray icon shows the playing station's icon, otherwise the drawn
   RadioPit logo (`src/icon.rs`).
+- Remote control ("Playing on…", `src/remote.rs`): the tray registers itself
+  on the account's WebSocket as a player and can also steer the account's
+  other online players from the menu. This is an **external** connection to
+  the RadioPit server (tokio-tungstenite over wss, one task on the tokio
+  runtime) — **not** IPC between the two processes; the config.toml-only rule
+  above is unchanged. Device identity is a `device_id` persisted in
+  config.toml. The server only accepts `kind` "web"/"android", so we
+  register as `KIND = "web"` (flip that one const if the backend later
+  allows "tray"). The `allow_remote_control` config option (default on)
+  blocks the *incoming* direction by registering non-playable (`canPlay:
+  false`, so the server stops routing commands to us) and dropping inbound
+  commands; outgoing control is unaffected.
 - Both modes hold a `flock` lock; a second start exits with
   "already running".
 

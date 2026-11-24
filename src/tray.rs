@@ -2,10 +2,11 @@
 //!
 //! No GUI window exists in this process at all: the tray icon
 //! (StatusNotifierItem via libappindicator) carries the menu and the
-//! now-playing info, GStreamer runs in its own thread, and the API/ICY/icon
-//! tasks live on a tokio runtime. The main thread is a plain tick loop:
-//! drain menu and player events, pump the GLib main context (the tray menu
-//! talks over D-Bus), watch the config file, and sync the tray.
+//! now-playing info, GStreamer runs in its own thread, and the
+//! API/ICY/icon/remote-control tasks live on a tokio runtime. The
+//! main thread is a plain tick loop: drain menu, player and remote
+//! control events, pump the GLib main context (the tray menu talks
+//! over D-Bus), watch the config file, and sync the tray.
 //!
 //! The config window is a separate process (`radiopittray --config`, see
 //! configui.rs); this process notices its result by watching config.toml.
@@ -27,6 +28,7 @@ use crate::icy::{self, IcyCmd};
 use crate::icon;
 use crate::menu;
 use crate::player::{self, Cmd, Ev};
+use crate::remote::{self, Action, RemoteInCmd, RemoteOut};
 use crate::state::{Playback, Shared};
 use crate::urls;
 
@@ -46,6 +48,8 @@ struct TrayApp {
     cmd_tx: Sender<Cmd>,
     ev_rx: Receiver<Ev>,
     icy: icy::IcyHandle,
+    /// Remote control ("Playing on…"): the account's WebSocket.
+    remote: remote::RemoteHandle,
     /// Owns the tokio runtime, keeping its worker threads alive. A bare
     /// `Handle` would not: tasks spawned on a dropped runtime are abandoned.
     #[allow(dead_code)]
@@ -82,6 +86,7 @@ impl TrayApp {
         let _ = cmd_tx.send(Cmd::SetMute(muted));
 
         let icy = icy::IcyHandle::spawn(handle.clone(), shared.clone());
+        let remote = remote::RemoteHandle::spawn(handle.clone(), shared.clone());
 
         let tray_menu = menu::build_menu(&shared.lock().unwrap());
         let tray = TrayIconBuilder::new()
@@ -101,6 +106,7 @@ impl TrayApp {
             cmd_tx,
             ev_rx,
             icy,
+            remote,
             runtime,
             handle,
             tray_icon_cache: HashMap::new(),
@@ -126,6 +132,7 @@ impl TrayApp {
         loop {
             self.drain_player_events();
             self.drain_menu_events();
+            self.drain_remote_commands();
             self.watch_config();
             self.sync_tray();
 
@@ -176,7 +183,7 @@ impl TrayApp {
 
     /// Play the given station (station button, or the "Play stream" line).
     /// Remembers it as the last played station and starts ICY metadata.
-    fn play_station(&mut self, station: Station) {
+    fn play_station(&mut self, station: Station, from_remote: bool) {
         // A station URL points at bytes the app downloads and decodes
         // (playbin and the ICY connection). Refuse anything that is not
         // a plain public http(s) stream: no file://, no local or private
@@ -199,6 +206,8 @@ impl TrayApp {
         s.playback_error = None;
         s.icy_title = None;
         s.icy_artist = None;
+        // A remote-initiated play does not raise a "new track" notification.
+        s.remote_initiated = from_remote;
         s.config.last_station_id = Some(station.id.clone());
         if let Err(e) = s.config.save() {
             tracing::warn!("saving config: {e:#}");
@@ -244,21 +253,41 @@ impl TrayApp {
     fn handle_menu_action(&mut self, id: &str) {
         use menu::*;
         match id {
-            PLAY_STOP => match {
-                let s = self.shared.lock().unwrap();
-                s.playback
-            } {
-                Playback::Stopped => {
-                    let station = {
-                        let s = self.shared.lock().unwrap();
-                        s.current.clone()
+            PLAY_STOP => {
+                // Controlling a remote: play/stop applies to the remote.
+                if let Some(target) = self.remote_target() {
+                    let active = matches!(
+                        self.shared
+                            .lock()
+                            .unwrap()
+                            .remote_target_state()
+                            .map(|st| st.state.as_str()),
+                        Some("playing") | Some("connecting")
+                    );
+                    let action = if active {
+                        Action::Pause
+                    } else {
+                        Action::Play
                     };
-                    if let Some(st) = station {
-                        self.play_station(st);
+                    self.send_remote_command(&target, action, None, None);
+                } else {
+                    match {
+                        let s = self.shared.lock().unwrap();
+                        s.playback
+                    } {
+                        Playback::Stopped => {
+                            let station = {
+                                let s = self.shared.lock().unwrap();
+                                s.current.clone()
+                            };
+                            if let Some(st) = station {
+                                self.play_station(st, false);
+                            }
+                        }
+                        // Loading or playing: the line reads "Stop stream [X]".
+                        _ => self.stop(),
                     }
                 }
-                // Loading or playing: the line reads "Stop stream [X]".
-                _ => self.stop(),
             }
             REFRESH => self.refresh_library(),
             WEB => open_url("https://radiopit.fm"),
@@ -267,18 +296,131 @@ impl TrayApp {
                 let _ = self.cmd_tx.send(Cmd::Stop);
                 std::process::exit(0);
             }
+            REMOTE_LOCAL => self.select_remote(None),
+            id if id.starts_with("remote:") => {
+                let device_id = id.strip_prefix("remote:").unwrap().to_string();
+                self.select_remote(Some(device_id));
+            }
+            VOL_UP | VOL_DOWN => {
+                let Some(target) = self.remote_target() else {
+                    return;
+                };
+                let (current, delta) = {
+                    let s = self.shared.lock().unwrap();
+                    // Fall back to this tray's volume while the remote
+                    // has not reported one yet.
+                    let current = s
+                        .remote_target_state()
+                        .map(|st| st.volume)
+                        .unwrap_or_else(|| (s.volume * 100.0).round() as u32);
+                    (current, if id == VOL_UP { 10 } else { -10 })
+                };
+                let v = (current as i32 + delta).clamp(0, 100) as u32;
+                self.send_remote_command(&target, Action::SetVolume, Some(v), None);
+            }
             id if id.starts_with("st:") => {
+                let station_id = id.strip_prefix("st:").unwrap().to_string();
+                // Controlling a remote: the station switch happens there.
+                if let Some(target) = self.remote_target() {
+                    self.send_remote_command(&target, Action::SetStation, None, Some(station_id));
+                    return;
+                }
                 let station = {
                     let s = self.shared.lock().unwrap();
                     s.library
                         .as_ref()
-                        .and_then(|lib| lib.by_id(id.strip_prefix("st:").unwrap()).cloned())
+                        .and_then(|lib| lib.by_id(&station_id).cloned())
                 };
                 if let Some(st) = station {
-                    self.play_station(st);
+                    self.play_station(st, false);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The device the tray is currently controlling, if any.
+    fn remote_target(&self) -> Option<String> {
+        self.shared.lock().unwrap().remote_target.clone()
+    }
+
+    /// Switch which device the tray is controlling (`None` = local).
+    /// The selection is plain shared state; the server does not need to
+    /// know about it.
+    fn select_remote(&mut self, target: Option<String>) {
+        let mut s = self.shared.lock().unwrap();
+        if s.remote_target != target {
+            s.remote_target = target;
+            s.menu_dirty = true;
+        }
+    }
+
+    /// Send a control command to a device on the account.
+    fn send_remote_command(
+        &self,
+        to: &str,
+        action: Action,
+        volume: Option<u32>,
+        station_id: Option<String>,
+    ) {
+        self.remote.send(RemoteOut::Command {
+            to: to.to_string(),
+            action,
+            volume,
+            station_id,
+        });
+    }
+
+    /// Commands other devices of the account routed to this tray
+    /// (it is the player side of the "Playing on…" feature). They run
+    /// through the same code path as a menu click.
+    fn drain_remote_commands(&mut self) {
+        while let Some(cmd) = self.remote.try_recv_in() {
+            match cmd {
+                RemoteInCmd::Play => {
+                    // Like the web app: resume the current station, or
+                    // start the first one of the library.
+                    let station = {
+                        let s = self.shared.lock().unwrap();
+                        s.current.clone().or_else(|| {
+                            s.library
+                                .as_ref()
+                                .and_then(|lib| {
+                                    lib.all_stations()
+                                        .min_by_key(|st| st.order)
+                                        .cloned()
+                                })
+                        })
+                    };
+                    if let Some(st) = station {
+                        self.play_station(st, true);
+                    }
+                }
+                RemoteInCmd::Pause => self.stop(),
+                RemoteInCmd::SetVolume(v) => {
+                    // Session-only, like the web app: the owner's saved
+                    // volume in config.toml is left untouched.
+                    let _ = self.cmd_tx.send(Cmd::SetVolume(v as f64 / 100.0));
+                    let mut s = self.shared.lock().unwrap();
+                    s.volume = v as f64 / 100.0;
+                    s.muted = v == 0;
+                    s.menu_dirty = true;
+                }
+                RemoteInCmd::SetStation(station_id) => {
+                    let station = {
+                        let s = self.shared.lock().unwrap();
+                        s.library
+                            .as_ref()
+                            .and_then(|lib| lib.by_id(&station_id).cloned())
+                    };
+                    match station {
+                        Some(st) => self.play_station(st, true),
+                        // The web app would flash an error state; the
+                        // tray has no such surface, so it is logged.
+                        None => tracing::warn!("remote: unknown station {station_id:?}"),
+                    }
+                }
+            }
         }
     }
 
@@ -293,10 +435,19 @@ impl TrayApp {
         }
         self.config_mtime = mtime;
         let conf = config::Config::load();
-        let (old_key, old_volume) = {
+        let (old_key, old_url, old_file_volume, old_allow_remote) = {
             let s = self.shared.lock().unwrap();
-            (s.config.api_key.clone(), s.volume)
+            (
+                s.config.api_key.clone(),
+                s.config.api_url.clone(),
+                // The volume the last-read file carried — not the
+                // session volume, which a remote volume change may have
+                // moved (and must not be clobbered on a reload).
+                s.config.volume,
+                s.config.allow_remote_control,
+            )
         };
+        let key_or_url_changed = conf.api_key != old_key || conf.api_url != old_url;
         if conf.api_key != old_key {
             let mut s = self.shared.lock().unwrap();
             s.config = conf.clone();
@@ -320,7 +471,13 @@ impl TrayApp {
             let mut s = self.shared.lock().unwrap();
             s.config = conf.clone();
         }
-        if conf.volume != old_volume {
+        if key_or_url_changed || conf.allow_remote_control != old_allow_remote {
+            // Re-authenticate the remote-control session with the new
+            // credentials (a cleared key ends the session), or re-register
+            // the device as (non-)playable when the toggle flipped.
+            self.remote.send(RemoteOut::Reconnect);
+        }
+        if conf.volume != old_file_volume {
             let _ = self.cmd_tx.send(Cmd::SetVolume(conf.volume));
         }
     }
@@ -334,6 +491,9 @@ impl TrayApp {
                 self.tray.set_menu(Some(Box::new(m)));
                 s.menu_dirty = false;
             }
+            // The icon and tooltip always follow this tray's own player —
+            // even while a remote is controlled (no icon change for remote
+            // playback). The menu carries the remote's state instead.
             let tooltip = match &s.current {
                 Some(st) => format!("RadioPit — {}", st.name),
                 None => "RadioPit".to_string(),
@@ -482,7 +642,16 @@ pub fn run() -> anyhow::Result<()> {
         }
     };
 
-    let conf = config::Config::load();
+    let mut conf = config::Config::load();
+    // A stable identity for the "Playing on…" list (the web/Android
+    // apps keep theirs in localStorage); persisted so a restart is
+    // still recognized as the same player.
+    if conf.device_id.is_none() {
+        conf.device_id = Some(uuid::Uuid::new_v4().to_string());
+        if let Err(e) = conf.save() {
+            tracing::warn!("saving config: {e:#}");
+        }
+    }
     let shared = Arc::new(Mutex::new(Shared::new(conf)));
 
     // GTK (and with it the GLib main context) is used by the tray's menu on

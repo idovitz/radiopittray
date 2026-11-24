@@ -24,6 +24,15 @@ pub struct Config {
     /// How long that notification stays up, in seconds (0 = until
     /// dismissed).
     pub notify_duration_secs: u32,
+    /// Stable id of this player on the account (remote control). The
+    /// web/Android apps keep theirs in localStorage; the tray keeps it
+    /// here so the "Playing on…" list recognizes this install.
+    pub device_id: Option<String>,
+    /// Whether other devices of the account may control this player
+    /// (remote control, "incoming" direction). When off, the player still
+    /// lists and controls the account's other devices, but registers as
+    /// non-playable and ignores inbound commands.
+    pub allow_remote_control: bool,
 }
 
 impl Default for Config {
@@ -36,6 +45,8 @@ impl Default for Config {
             autostart: false,
             notify_new_track: true,
             notify_duration_secs: 10,
+            device_id: None,
+            allow_remote_control: true,
         }
     }
 }
@@ -150,6 +161,9 @@ mod tests {
             toml::from_str("api_key = \"k\"\napi_url = \"https://api.radiopit.fm\"\n").unwrap();
         assert!(d.notify_new_track);
         assert_eq!(d.notify_duration_secs, 10);
+        // Likewise, an old file without the remote-control toggle keeps
+        // accepting inbound remote control (no behaviour change on upgrade).
+        assert!(d.allow_remote_control);
     }
 
     #[cfg(unix)]
