@@ -243,14 +243,22 @@ fn parse_stream_title(raw: &[u8]) -> Option<(Option<String>, String)> {
             None => s,
         },
     };
-    // Strip a surrounding pair of quotes.
-    let s = if s.len() >= 2
-        && ((s.starts_with('\'') && s.ends_with('\''))
-            || (s.starts_with('"') && s.ends_with('"')))
-    {
-        s[1..s.len() - 1].to_string()
-    } else {
-        s
+    // Quote handling: some servers quote the whole title
+    // ('Artist - Title', NPO), others quote only the start
+    // ('Artist - Title, SomaFM and Radio Paradise). Strip one leading
+    // quote; strip a trailing quote only when a leading one was
+    // stripped, so a title that legitimately ends in an apostrophe
+    // (e.g. "Rockin'") is left alone.
+    let s = match s.as_bytes().first() {
+        Some(b'\'' | b'"') => {
+            let inner = &s[1..];
+            let inner = match inner.as_bytes().last() {
+                Some(b'\'' | b'"') => &inner[..inner.len() - 1],
+                _ => inner,
+            };
+            inner.to_string()
+        }
+        _ => s,
     };
     // Multi-line titles: the track info is the last non-empty line.
     let line = s
@@ -360,6 +368,32 @@ mod tests {
         let (a, t) = parse_stream_title(raw).unwrap();
         assert_eq!(a.as_deref(), Some("NOS Met het Oog op Morgen"));
         assert_eq!(t, "NOS");
+    }
+
+    #[test]
+    fn parses_leading_quote_only() {
+        // SomaFM / Radio Paradise: 'Artist - Title (start quoted, no
+        // trailing quote).
+        let raw = b"StreamTitle='Blondie - Rapture (Doomsday Deathmix);\0";
+        let (a, t) = parse_stream_title(raw).unwrap();
+        assert_eq!(a.as_deref(), Some("Blondie"));
+        assert_eq!(t, "Rapture (Doomsday Deathmix)");
+    }
+
+    #[test]
+    fn keeps_apostrophe_at_end_of_unquoted_title() {
+        // No leading quote: a trailing apostrophe belongs to the title.
+        let (a, t) = parse_stream_title(b"Johnny Cash - Rockin';").unwrap();
+        assert_eq!(a.as_deref(), Some("Johnny Cash"));
+        assert_eq!(t, "Rockin'");
+    }
+
+    #[test]
+    fn quoted_title_ending_in_apostrophe() {
+        // Leading + trailing quote: the inner apostrophe survives.
+        let (a, t) = parse_stream_title(b"StreamTitle='Rockin'';\0").unwrap();
+        assert_eq!(a, None);
+        assert_eq!(t, "Rockin'");
     }
 
     #[test]
