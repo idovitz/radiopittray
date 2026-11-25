@@ -24,6 +24,10 @@ pub struct Config {
     /// How long that notification stays up, in seconds (0 = until
     /// dismissed).
     pub notify_duration_secs: u32,
+    /// Look up the track's album art (Apple iTunes Search API) for the
+    /// notification image; the station icon is the fallback. The same
+    /// source the RadioPit web/Android apps use.
+    pub notify_album_art: bool,
     /// Stable id of this player on the account (remote control). The
     /// web/Android apps keep theirs in localStorage; the tray keeps it
     /// here so the "Playing on…" list recognizes this install.
@@ -45,6 +49,7 @@ impl Default for Config {
             autostart: false,
             notify_new_track: true,
             notify_duration_secs: 10,
+            notify_album_art: true,
             device_id: None,
             allow_remote_control: true,
         }
@@ -144,6 +149,7 @@ mod tests {
         c.volume = 0.42;
         c.notify_new_track = false;
         c.notify_duration_secs = 30;
+        c.notify_album_art = false;
         let s = toml::to_string(&c).unwrap();
         let d: Config = toml::from_str(&s).unwrap();
         assert_eq!(d.api_key, "test-key-123");
@@ -151,6 +157,7 @@ mod tests {
         assert_eq!(d.api_url, DEFAULT_API_URL);
         assert!(!d.notify_new_track);
         assert_eq!(d.notify_duration_secs, 30);
+        assert!(!d.notify_album_art);
     }
 
     #[test]
@@ -161,6 +168,7 @@ mod tests {
             toml::from_str("api_key = \"k\"\napi_url = \"https://api.radiopit.fm\"\n").unwrap();
         assert!(d.notify_new_track);
         assert_eq!(d.notify_duration_secs, 10);
+        assert!(d.notify_album_art);
         // Likewise, an old file without the remote-control toggle keeps
         // accepting inbound remote control (no behaviour change on upgrade).
         assert!(d.allow_remote_control);

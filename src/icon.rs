@@ -1,6 +1,7 @@
 //! Tray/window icons. The tray icon is the procedurally drawn RadioPit
-//! logo (radio waves + dot). While playing, the waves brighten and the
-//! dot turns green. No binary assets and no icon-theme lookup needed.
+//! logo (radio waves + dot): the same icon the window shows, so tray and
+//! window match. While playing, the waves brighten and the dot turns
+//! green. No binary assets and no icon-theme lookup needed.
 
 pub const ICON_SIZE: u32 = 64;
 
@@ -152,6 +153,48 @@ pub fn fetch_icon_url(url: &str) -> String {
     format!("{prefix}/120px-{file}")
 }
 
+/// The "no album art" placeholder: a gray square with a musical note.
+/// Shown in the history table and as the last-resort notification
+/// image. Drawn at 2× and downscaled, so the edges come out
+/// antialiased.
+pub fn note_placeholder(size: u32) -> image::RgbaImage {
+    let s = size * 2;
+    let big = {
+        let mut img = image::RgbaImage::from_pixel(s, s, image::Rgba([48, 51, 58, 255]));
+        let note = image::Rgba([172, 178, 192, 255]);
+        // A quarter note: a tilted oval head with a stem rising from its
+        // right side (coordinates as fractions of the canvas).
+        let cx = 0.40 * s as f32;
+        let cy = 0.62 * s as f32;
+        let rx = 0.17 * s as f32;
+        let ry = 0.12 * s as f32;
+        let (sin_t, cos_t) = (0.35f32.sin(), 0.35f32.cos());
+        let stem_w = 0.05 * s as f32;
+        let stem_x = cx + rx * cos_t;
+        let stem_top = 0.18 * s as f32;
+        for y in 0..s {
+            for x in 0..s {
+                let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+                // Head: the point, rotated back, inside the axis-aligned
+                // ellipse.
+                let dx = x - cx;
+                let dy = y - cy;
+                let xr = dx * cos_t - dy * sin_t;
+                let yr = dx * sin_t + dy * cos_t;
+                let in_head = (xr / rx) * (xr / rx) + (yr / ry) * (yr / ry) <= 1.0;
+                let in_stem = (x - stem_x).abs() <= stem_w / 2.0 && (stem_top..=cy + ry).contains(&y);
+                if in_head || in_stem {
+                    img.put_pixel(x as u32, y as u32, note);
+                }
+            }
+        }
+        img
+    };
+    image::DynamicImage::ImageRgba8(big)
+        .resize(size, size, image::imageops::FilterType::Lanczos3)
+        .to_rgba8()
+}
+
 /// Fit an image into a `size`×`size` RGBA canvas, preserving the aspect
 /// ratio. Station icons are not always square (and `resize` alone would
 /// return e.g. 32×18 for a landscape icon, which the PNG writer then
@@ -196,6 +239,16 @@ mod tests {
         assert_eq!(fetch_icon_url(url), url);
         let url = "https://upload.wikimedia.org/wikipedia/commons/foo.png";
         assert_eq!(fetch_icon_url(url), url);
+    }
+
+    #[test]
+    fn note_placeholder_is_a_gray_square_with_a_note() {
+        let img = note_placeholder(64);
+        assert_eq!((img.width(), img.height()), (64, 64));
+        // The corners are the plain gray background.
+        assert_eq!(img.get_pixel(2, 2), &image::Rgba([48, 51, 58, 255]));
+        // The note is a lighter grey and actually present.
+        assert!(img.pixels().any(|p| p[0] > 120 && p[1] > 120 && p[2] > 120));
     }
 
     #[test]

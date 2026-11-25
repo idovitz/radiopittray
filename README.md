@@ -92,6 +92,7 @@ last_station_id = null
 autostart = false
 notify_new_track = true
 notify_duration_secs = 10
+notify_album_art = true
 device_id = "..."
 allow_remote_control = true
 ```
@@ -103,7 +104,13 @@ desktop notification (XDG `org.freedesktop.Notifications`, as rendered
 by GNOME, Plasma, …) whenever a new track starts: the station icon,
 the station name, the artist and the track title. `notify_duration_secs`
 is how long it stays up (default 10; 0 keeps it on screen until you
-dismiss it). It only triggers on
+dismiss it). `notify_album_art` (on by default) makes the notification
+image the track's album art, looked up on Apple's public iTunes
+Search API from the track title — the same source the RadioPit
+web/Android apps use — falling back to the station icon when the
+lookup finds nothing or is too slow. The lookup sends the track title
+to Apple; set it to `false` if you don't want that (the notification
+then always uses the station icon). It only triggers on
 a track that actually changed, so ICY streams that repeat a title do
 not spam, and no notification appears when the stream does not provide
 metadata. `device_id` is the stable identity behind the

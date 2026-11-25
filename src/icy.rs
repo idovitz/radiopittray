@@ -322,6 +322,7 @@ fn set_info(
                     artist: artist.clone(),
                     title: t.clone(),
                     icon_url: st.icon_url.clone(),
+                    album_art: s.config.notify_album_art,
                     duration_secs: s.config.notify_duration_secs,
                 })
             })

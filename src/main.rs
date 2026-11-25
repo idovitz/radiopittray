@@ -10,6 +10,7 @@
 //! change up from the config file.
 
 mod api;
+mod artwork;
 mod config;
 mod configui;
 mod history;

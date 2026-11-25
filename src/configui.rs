@@ -27,6 +27,9 @@ struct UiState {
     /// How long such a notification stays up, in seconds (mirrors the
     /// config).
     notify_duration_secs: u32,
+    /// Whether notifications look up the track's album art (mirrors
+    /// the config).
+    notify_album_art: bool,
     /// Whether other devices may control this player (mirrors the config).
     allow_remote_control: bool,
     /// Set once the key has been saved; the window closes itself.
@@ -230,6 +233,20 @@ fn draw_key_view(
         }
         ctx.request_repaint();
     }
+    let mut album_art = state.lock().unwrap().notify_album_art;
+    if ui.checkbox(&mut album_art, "Use album art in notifications").changed() {
+        if let Err(e) = {
+            let mut conf = config::Config::load();
+            conf.notify_album_art = album_art;
+            conf.save()
+        } {
+            let mut s = state.lock().unwrap();
+            s.error = Some(format!("saving config: {e:#}"));
+        } else {
+            state.lock().unwrap().notify_album_art = album_art;
+        }
+        ctx.request_repaint();
+    }
 
     // -- Remote control -------------------------------------------------------
     ui.separator();
@@ -277,7 +294,12 @@ fn open_url(url: &str) {
 fn acquire_lock() -> Option<File> {
     let dir = config::ensure_config_dir();
     let path = dir.join("config-window.lock");
-    let file = std::fs::OpenOptions::new().create(true).write(true).open(&path).ok()?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .ok()?;
     let ok = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if ok == 0 {
         Some(file)
@@ -303,6 +325,7 @@ pub fn run() -> anyhow::Result<()> {
         autostart: conf.autostart,
         notify_new_track: conf.notify_new_track,
         notify_duration_secs: conf.notify_duration_secs,
+        notify_album_art: conf.notify_album_art,
         allow_remote_control: conf.allow_remote_control,
         saved: false,
     }));
@@ -363,9 +386,11 @@ pub fn spawn_config_window() {
 /// `... (deleted)` path that cannot be spawned. On Linux the
 /// `/proc/self/exe` magic link still resolves to the running inode.
 fn config_window_exe(exe: &std::path::Path) -> &std::path::Path {
-    (cfg!(target_os = "linux") && exe.to_string_lossy().ends_with(" (deleted)"))
-        .then(|| std::path::Path::new("/proc/self/exe"))
-        .unwrap_or(exe)
+    if cfg!(target_os = "linux") && exe.to_string_lossy().ends_with(" (deleted)") {
+        std::path::Path::new("/proc/self/exe")
+    } else {
+        exe
+    }
 }
 
 #[cfg(test)]
