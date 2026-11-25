@@ -331,7 +331,7 @@ fn set_info(
         };
         s.icy_artist = artist;
         s.icy_title = title;
-        s.menu_dirty = true;
+        s.ui_dirty = true;
         notify
     };
     if let Some(np) = now_playing {

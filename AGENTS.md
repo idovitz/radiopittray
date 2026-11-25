@@ -18,24 +18,31 @@ See `README.md` for human-facing docs (installation, usage, configuration).
 
 ## Architecture
 
-- One binary, two modes: `radiopittray` runs the tray process (no window);
-  `radiopittray --config` runs the config window as a separate process.
-  The two only communicate through `~/.config/radiopittray/config.toml` —
-  the tray process watches its mtime and reloads (`src/tray.rs`).
-  Don't introduce direct IPC between them.
+- One binary, two modes: `radiopittray` runs the tray process (tray icon +
+  popup window); `radiopittray --config` runs the config window as a separate
+  process. The two only communicate through
+  `~/.config/radiopittray/config.toml` — the tray process watches its mtime
+  and reloads (`src/tray.rs`). Don't introduce direct IPC between them.
 - Audio: GStreamer on a dedicated thread (`src/player.rs`); ICY stream
   metadata on a tokio task (`src/icy.rs`). Don't casually restructure the
   thread/task split.
-- Tray: StatusNotifierItem via libappindicator (`src/tray.rs`, `src/menu.rs`).
-  The tray icon shows the playing station's icon, otherwise the drawn
-  RadioPit logo (`src/icon.rs`).
+- Tray: StatusNotifierItem via the ksni backend (`src/tray.rs`). The tray
+  icon shows the playing station's icon, otherwise the drawn RadioPit logo
+  (`src/icon.rs`). A left click toggles the main window (`src/ui.rs`), which
+  carries the full UI: now playing + transport, a "Playing on…" selector,
+  a Stations tab (library with station icons) and a History tab. The window
+  has no direct access to the player/API/WebSocket: it pushes `WindowReq`s
+  through `WindowCtl`, and the tick thread executes them. Right click shows
+  the minimal fallback menu (`src/menu.rs`: Open main window /
+  Configuration… / Quit) — keep it static; put real functionality in the
+  window.
 - Remote control ("Playing on…", `src/remote.rs`): the tray registers itself
   on the account's WebSocket as a player and can also steer the account's
-  other online players from the menu. This is an **external** connection to
-  the RadioPit server (tokio-tungstenite over wss, one task on the tokio
-  runtime) — **not** IPC between the two processes; the config.toml-only rule
-  above is unchanged. Device identity is a `device_id` persisted in
-  config.toml. The server only accepts `kind` "web"/"android", so we
+  other online players from the window's "Playing on…" selector. This is an
+  **external** connection to the RadioPit server (tokio-tungstenite over wss,
+  one task on the tokio runtime) — **not** IPC between the two processes; the
+  config.toml-only rule above is unchanged. Device identity is a `device_id`
+  persisted in config.toml. The server only accepts `kind` "web"/"android", so we
   register as `KIND = "web"` (flip that one const if the backend later
   allows "tray"). The `allow_remote_control` config option (default on)
   blocks the *incoming* direction by registering non-playable (`canPlay:

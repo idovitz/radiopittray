@@ -276,6 +276,7 @@ async fn session(
                         "type": "COMMAND",
                         "payload": { "to": to, "action": action.wire(), "params": params },
                     });
+                    tracing::debug!("remote: sending {} to {to}", action.wire());
                     if sock.send(Message::Text(msg.to_string().into())).await.is_err() {
                         return false;
                     }
@@ -377,12 +378,12 @@ fn set_connected(shared: &Arc<Mutex<Shared>>, connected: bool, clear_devices: bo
     let mut s = shared.lock().unwrap();
     if s.remote_connected != connected {
         s.remote_connected = connected;
-        s.menu_dirty = true;
+        s.ui_dirty = true;
     }
     if clear_devices && (!s.remote_devices.is_empty() || s.remote_target.is_some()) {
         s.remote_devices.clear();
         s.remote_target = None;
-        s.menu_dirty = true;
+        s.ui_dirty = true;
     }
 }
 
@@ -419,7 +420,7 @@ fn apply_devices(
     if target_gone {
         s.remote_target = None;
     }
-    s.menu_dirty = true;
+    s.ui_dirty = true;
 }
 
 /// Update one device's last reported state.
@@ -429,7 +430,7 @@ fn apply_device_state(shared: &Arc<Mutex<Shared>>, device_id: &str, st: RemoteSt
         if let Some(d) = s.remote_devices.iter_mut().find(|d| d.id == device_id) {
             d.state = Some(st);
         }
-        s.menu_dirty = true;
+        s.ui_dirty = true;
     }
 }
 

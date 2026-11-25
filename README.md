@@ -1,11 +1,13 @@
 # radiopittray
 
 A system tray radio player for your [RadioPit.fm](https://radiopit.fm)
-library, written in Rust. It is a **pure tray app**: the tray icon is the
-icon of the station that is playing, and the menu shows what is playing and
-lets you pick stations. The app opens **no window** — the only window of the
-program is the configuration screen (Configuration… in the menu), which runs
-as a separate process and closes again. Audio is played through GStreamer;
+library, written in Rust. It is a **tray-first app**: the tray icon is the
+icon of the station that is playing, and a left click opens a small window
+that carries the whole UI — now playing, your stations and a playback
+history. The right-click menu is just a minimal fallback (*Open main
+window*, *Configuration…*, *Quit*), which also works when the window
+cannot be shown. The configuration screen (Configuration…) runs as a
+separate process and closes again. Audio is played through GStreamer;
 track titles/artists come from the stream's ICY metadata. You edit your
 stations on radiopit.fm itself — this little app needs no editor.
 
@@ -18,7 +20,7 @@ stations on radiopit.fm itself — this little app needs no editor.
 - GStreamer with the base and good plugin sets, plus the libav plugins
   (codec coverage for whatever the streams throw at the player)
 - A StatusNotifierItem-capable tray backend (e.g. libayatana-appindicator)
-- `xdg-open` (xdg-utils) for the "Open radiopit.fm" menu item
+- `xdg-open` (xdg-utils) for the "Open radiopit.fm" action
 
 ## Building
 
@@ -33,28 +35,35 @@ The binary ends up in `target/release/radiopittray`.
 1. Start `radiopittray`. On the first run (no key yet) the configuration
    screen opens by itself; you find your key on radiopit.fm under
    ⋮ → *Your Key*.
-2. Right-click the tray icon:
-   - **top**: what is playing — the station title, the track title and the
+2. **Left-click** the tray icon to open the window (it appears under the
+   icon and hides again when you click anywhere outside or press its ✕ —
+   hiding it never stops playback):
+   - **top**: the playing station's album art, the track title and the
      artist (as long as the stream provides ICY metadata; some streams,
-     e.g. HLS, do not).
-   - **Play stream [X] / Stop stream [X]**: a single line that toggles.
-     Play always starts the last played station (also after restarting the
-     app); Stop stops the stream.
-   - *Control device:* (only when other players of the account are online):
-     switch which device is being controlled (see
-     [Remote control](#remote-control)).
-   - stations per playlist — clicking a station plays it immediately (and
-     stops the previous stream).
-   - Refresh library, Open radiopit.fm, Configuration…, Quit.
-3. The tray icon shows the icon of the playing station; when nothing is
+     e.g. HLS, do not), plus the ▶ / ⏹ transport controls. Play always
+     starts the last played station (also after restarting the app);
+     Stop stops the stream.
+   - **Playing on…** (only when other players of the account are
+     online): switch which device the window controls, with volume steps
+     while one is selected (see [Remote control](#remote-control)).
+   - **Stations** tab: your library as collapsible playlists, each
+     station with its icon and a filter field; clicking a station plays
+     it immediately (and stops the previous stream).
+   - **History** tab: the tracks heard recently, with album-art
+     thumbnails.
+   - **bottom**: Refresh library, Open radiopit.fm.
+3. **Right-click** the tray icon for the minimal menu: *Open main window*,
+   *Configuration…* and *Quit*.
+4. The tray icon shows the icon of the playing station; when nothing is
    playing (or the icon is missing) it shows the RadioPit logo. The tooltip
    shows the current station.
-4. The configuration screen (Configuration…) is a separate window: there you
+5. The configuration screen (Configuration…) is a separate window: there you
    set the key (Connect/Save validates and stores it), the *Start at login*
    checkbox and the *Notify on new track* checkbox. The window closes itself
    once the key has been saved.
-5. Quitting is only possible via *Quit* in the menu (or Ctrl+C). At most one
-   tray process can run; a second start exits with "already running".
+6. Quitting is only possible via *Quit* in the right-click menu (or Ctrl+C).
+   At most one tray process can run; a second start exits with "already
+   running".
 
 ## Remote control
 
@@ -67,10 +76,10 @@ return:
   can start/stop it, change its volume, and switch its station; the tray icon
   and tooltip follow what it is playing. (Set `allow_remote_control = false`
   to block this incoming direction — see *Configuration*.)
-- **Controlling.** When the account has other online players, the menu gains
-  a *Control device:* submenu (plus *Volume −10* / *Volume +10* while one is
+- **Controlling.** When the account has other online players, the window
+  gains a *Playing on…* selector (plus volume −/+ steps while one is
   selected). Pick another player to drive it instead of the local one: the
-  now-playing info, the play/stop line, and station clicks all apply to the
+  transport controls and station picks in the window all apply to the
   selected device, while the tray icon keeps showing this tray's own player
   (it does not mirror the remote). "This device" switches back to local
   playback.
@@ -147,4 +156,4 @@ RADIOPI_LIVE_TEST_KEY="<your key>" cargo test -- --ignored
   the server currently only accepts "web" and "android" — so it shows up like
   a web player in the "Playing on…" list, and it needs a connection to the
   RadioPit server (when the socket is down the feature is simply unavailable
-  and the menu shows only local playback).
+  and the window shows only local playback).
