@@ -23,6 +23,7 @@ use tray_icon::TrayIconBuilder;
 use crate::api::{self, Client, Station};
 use crate::config;
 use crate::configui;
+use crate::history;
 use crate::icy::{self, IcyCmd};
 use crate::icon;
 use crate::menu;
@@ -60,6 +61,8 @@ struct TrayApp {
     /// mtime of config.toml as last seen; a change means the config window
     /// (or an editor) saved something.
     config_mtime: Option<SystemTime>,
+    /// When history was last written to disk (to throttle saves).
+    last_history_save: Option<SystemTime>,
     /// The stream URI the ICY metadata task is currently tracking (the
     /// direct stream, or the proxy fallback once the player switches to
     /// it). Compared against the player's `Ev::Playing` URI so the
@@ -115,6 +118,7 @@ impl TrayApp {
             tray_icon_cache: HashMap::new(),
             tray_shown: ShownIcon::Logo(false),
             config_mtime,
+            last_history_save: None,
             icy_url: None,
         })
     }
@@ -139,6 +143,7 @@ impl TrayApp {
             self.drain_remote_commands();
             self.watch_config();
             self.sync_tray();
+            self.save_history_if_dirty();
 
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -652,6 +657,32 @@ impl TrayApp {
             icon::idle_icon()
         })
     }
+
+    /// Persist the history when it changed (throttled).
+    fn save_history_if_dirty(&mut self) {
+        let due = self
+            .last_history_save
+            .map(|t| t.elapsed().unwrap_or(Duration::ZERO) >= Duration::from_secs(2))
+            .unwrap_or(true);
+        if !due {
+            return;
+        }
+        let (dirty, snapshot) = {
+            let mut s = self.shared.lock().unwrap();
+            if !s.history_dirty {
+                (false, Vec::new())
+            } else {
+                s.history_dirty = false;
+                (true, s.history.clone())
+            }
+        };
+        if dirty {
+            if let Err(e) = history::save(&snapshot) {
+                tracing::warn!("saving history: {e:#}");
+            }
+            self.last_history_save = Some(SystemTime::now());
+        }
+    }
 }
 
 /// Run the tray application: build it and enter the tick loop.
@@ -675,6 +706,10 @@ pub fn run() -> anyhow::Result<()> {
         }
     }
     let shared = Arc::new(Mutex::new(Shared::new(conf)));
+    {
+        let mut s = shared.lock().unwrap();
+        s.history = history::load();
+    }
 
     TrayApp::new(shared)?.run();
     // Unreachable: the tick loop runs until the process exits (which

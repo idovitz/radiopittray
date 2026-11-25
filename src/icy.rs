@@ -302,6 +302,17 @@ fn set_info(
         let mut s = shared.lock().unwrap();
         let changed =
             (artist.as_ref(), title.as_ref()) != (s.icy_artist.as_ref(), s.icy_title.as_ref());
+        // A newly started track goes into the persisted history (newest
+        // first), regardless of the notification settings.
+        if changed {
+            let record = match (s.current.as_ref(), title.as_ref()) {
+                (Some(st), Some(t)) => Some((st.name.clone(), t.clone())),
+                _ => None,
+            };
+            if let Some((station, t)) = record {
+                s.record_track(station, artist.clone(), t);
+            }
+        }
         // No "new track" notification when playback was started by a remote
         // command (a phone tap should not raise a desktop notification).
         let notify = if changed && s.config.notify_new_track && !s.remote_initiated {

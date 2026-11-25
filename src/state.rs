@@ -6,6 +6,7 @@
 
 use crate::api::{Library, Station};
 use crate::config::Config;
+use crate::history::{self, HistoryEntry};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Playback {
@@ -72,6 +73,10 @@ pub struct Shared {
     /// The current playback was started by a remote command (not a local
     /// menu click), so the "new track" notification is suppressed.
     pub remote_initiated: bool,
+    /// Playback history, newest first (persisted across restarts).
+    pub history: Vec<HistoryEntry>,
+    /// `history` changed and must be persisted to disk.
+    pub history_dirty: bool,
     /// The tray menu/icon needs to be (re)built.
     pub menu_dirty: bool,
 }
@@ -98,6 +103,8 @@ impl Shared {
             remote_devices: Vec::new(),
             remote_target: None,
             remote_initiated: false,
+            history: Vec::new(),
+            history_dirty: false,
             menu_dirty: true,
         }
     }
@@ -149,6 +156,13 @@ impl Shared {
             .name
             .as_str()
             .into()
+    }
+
+    /// Record a freshly started track at the front of the history (newest
+    /// first) and flag it for persistence.
+    pub fn record_track(&mut self, station: String, artist: Option<String>, title: String) {
+        history::push(&mut self.history, HistoryEntry::new(station, artist, title));
+        self.history_dirty = true;
     }
 
     /// After a library (re)fetch: refresh `current` with the fresh station

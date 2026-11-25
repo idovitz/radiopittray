@@ -12,6 +12,7 @@
 mod api;
 mod config;
 mod configui;
+mod history;
 mod icon;
 mod icy;
 mod menu;
