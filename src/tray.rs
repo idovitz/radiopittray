@@ -1,12 +1,11 @@
-//! The windowless tray application.
+//! The tray application.
 //!
 //! No GUI window exists in this process at all: the tray icon
-//! (StatusNotifierItem via libappindicator) carries the menu and the
+//! (StatusNotifierItem via the ksni backend) carries the menu and the
 //! now-playing info, GStreamer runs in its own thread, and the
 //! API/ICY/icon/remote-control tasks live on a tokio runtime. The
 //! main thread is a plain tick loop: drain menu, player and remote
-//! control events, pump the GLib main context (the tray menu talks
-//! over D-Bus), watch the config file, and sync the tray.
+//! control events, watch the config file, and sync the tray.
 //!
 //! The config window is a separate process (`radiopittray --config`, see
 //! configui.rs); this process notices its result by watching config.toml.
@@ -35,9 +34,8 @@ use crate::urls;
 /// What the tray icon currently shows.
 #[derive(Clone, PartialEq, Debug)]
 enum ShownIcon {
-    /// The icon theme's "radio" icon (the .desktop entry's icon);
-    /// bool = playing (green dot at the antenna tip).
-    Theme(bool),
+    /// The procedural RadioPit logo; bool = playing (green dot).
+    Logo(bool),
     /// The icon of the station with this id.
     Station(String),
 }
@@ -110,7 +108,7 @@ impl TrayApp {
             runtime,
             handle,
             tray_icon_cache: HashMap::new(),
-            tray_shown: ShownIcon::Theme(false),
+            tray_shown: ShownIcon::Logo(false),
             config_mtime,
         })
     }
@@ -135,11 +133,6 @@ impl TrayApp {
             self.drain_remote_commands();
             self.watch_config();
             self.sync_tray();
-
-            // The tray menu talks to us over D-Bus (libappindicator); keep
-            // the GLib main context pumping so menu events get processed.
-            #[cfg(target_os = "linux")]
-            glib::MainContext::default().iteration(false);
 
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -499,9 +492,6 @@ impl TrayApp {
                 None => "RadioPit".to_string(),
             };
             let playing = s.playback == Playback::Playing;
-            // The station icon is shown while a stream is active; when
-            // none is available (fetch pending, no URL, failure) the
-            // theme's radio icon shows, dotted while actually playing.
             let want = match s.playback {
                 Playback::Loading | Playback::Playing => s
                     .current
@@ -535,9 +525,7 @@ impl TrayApp {
                 self.tray_shown = ShownIcon::Station(sid);
                 return icon::tray_icon_from_rgba(rgba.clone());
             }
-            // 2) Fetch/decode this station's icon (falls back to the
-            //    theme icon while the fetch is in flight or when there
-            //    is none).
+            // 2) Fetch/decode this station's icon.
             if let Some(ic) = self.try_station_icon(&sid, url.as_deref()) {
                 return Some(ic);
             }
@@ -616,14 +604,12 @@ impl TrayApp {
         None
     }
 
-    /// Show the theme's "radio" icon (the same one the .desktop entry
-    /// uses), with a green dot at the antenna tip while playing; falls
-    /// back to the procedural logo when the theme has no such icon.
+    /// Show the procedural RadioPit logo.
     fn apply_theme(&mut self, playing: bool) -> Option<tray_icon::Icon> {
-        if self.tray_shown == ShownIcon::Theme(playing) {
+        if self.tray_shown == ShownIcon::Logo(playing) {
             return None;
         }
-        self.tray_shown = ShownIcon::Theme(playing);
+        self.tray_shown = ShownIcon::Logo(playing);
         Some(if playing {
             icon::playing_icon()
         } else {
@@ -653,14 +639,6 @@ pub fn run() -> anyhow::Result<()> {
         }
     }
     let shared = Arc::new(Mutex::new(Shared::new(conf)));
-
-    // GTK (and with it the GLib main context) is used by the tray's menu on
-    // Linux; it must be initialized on the main thread, and the context is
-    // pumped from the tick loop.
-    #[cfg(target_os = "linux")]
-    if let Err(e) = gtk::init() {
-        eprintln!("warning: gtk::init() failed: {e}");
-    }
 
     TrayApp::new(shared)?.run();
     // Unreachable: the tick loop runs until the process exits (which

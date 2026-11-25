@@ -1,7 +1,7 @@
 //! radiopittray — a system tray radio player for your RadioPit.fm library.
 //!
 //! The tray process (no arguments) opens no window at all: the tray icon
-//! (StatusNotifierItem via libappindicator) carries the playlist/station
+//! (StatusNotifierItem via the ksni backend) carries the playlist/station
 //! menu and the now-playing info, audio playback runs on GStreamer in a
 //! dedicated thread, and ICY stream titles are read on a background task.
 //!
