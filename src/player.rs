@@ -8,7 +8,9 @@
 //! Commands come in over an mpsc channel; state changes go out over a second
 //! channel. Stream errors are read from the GStreamer bus (there is no
 //! `error` signal in this version of the bindings); a few automatic
-//! retries are made before giving up.
+//! retries are made before giving up. When the direct stream keeps failing
+//! (e.g. blocked by the user's firewall), the last retries go through the
+//! RadioPit server's stream proxy, like the web app does.
 //!
 //! There is no pause: "stop" tears the stream down completely, and "play"
 //! always (re)starts the stream at the live edge.
@@ -28,7 +30,13 @@ const MIN_RETRY_GAP: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub enum Cmd {
-    Play(Station),
+    /// Start playing. `proxy_url` is the RadioPit server proxy of
+    /// `station.url` (see [`crate::api::proxy_stream_url`]), used as a
+    /// fallback when the direct stream keeps failing.
+    Play {
+        station: Station,
+        proxy_url: Option<String>,
+    },
     Stop,
     SetVolume(f64),
     SetMute(bool),
@@ -36,7 +44,9 @@ pub enum Cmd {
 
 #[derive(Debug)]
 pub enum Ev {
-    Playing,
+    /// The stream is (re)playing; the string is the URI actually in use
+    /// (the direct stream, or the proxy fallback).
+    Playing(String),
     Stopped,
     Failed(String),
 }
@@ -92,16 +102,16 @@ struct Player {
     bus: gst::Bus,
     playbin: gst::Element,
     uri: Option<String>,
+    /// The RadioPit proxy of `uri`, tried when the direct stream keeps
+    /// failing (e.g. it is blocked by the local network).
+    proxy_uri: Option<String>,
     want_playing: bool,
     retries: u32,
     last_error: Option<Instant>,
 }
 
 impl Player {
-    fn restart_stream(&mut self, ev_tx: &Sender<Ev>) {
-        let Some(uri) = self.uri.clone() else {
-            return;
-        };
+    fn restart_stream(&mut self, ev_tx: &Sender<Ev>, uri: String) {
         // Full reset: Null -> set uri -> Playing. Just re-setting the state
         // does not always restart a dead stream.
         let _ = self.pipeline.set_state(gst::State::Null);
@@ -109,11 +119,22 @@ impl Player {
         match self.pipeline.set_state(gst::State::Playing) {
             Ok(_) => {
                 tracing::info!("stream (re)started: {uri}");
-                let _ = ev_tx.send(Ev::Playing);
+                let _ = ev_tx.send(Ev::Playing(uri));
             }
             Err(e) => {
                 tracing::warn!("starting stream: {e}");
             }
+        }
+    }
+
+    /// The URI for the next retry: once the direct stream has failed a
+    /// couple of times, go through the RadioPit proxy (when we have one) —
+    /// a stream the local firewall blocks is still reachable there.
+    fn retry_uri(&self) -> Option<String> {
+        if self.retries >= 2 {
+            self.proxy_uri.clone().or_else(|| self.uri.clone())
+        } else {
+            self.uri.clone()
         }
     }
 
@@ -140,8 +161,17 @@ impl Player {
             )));
             return;
         }
-        tracing::info!("reconnect attempt {}/{}", self.retries, MAX_RETRIES);
-        self.restart_stream(ev_tx);
+        let Some(uri) = self.retry_uri() else {
+            return;
+        };
+        let via_proxy = self.proxy_uri.as_deref() == Some(uri.as_str());
+        tracing::info!(
+            "reconnect attempt {}/{}{}",
+            self.retries,
+            MAX_RETRIES,
+            if via_proxy { " (via RadioPit proxy)" } else { "" }
+        );
+        self.restart_stream(ev_tx, uri);
     }
 
     /// Poll the bus for messages that matter to us (mainly errors).
@@ -176,6 +206,7 @@ fn build_player() -> Option<Player> {
         bus,
         playbin,
         uri: None,
+        proxy_uri: None,
         want_playing: false,
         retries: 0,
         last_error: None,
@@ -192,19 +223,23 @@ fn run(cmd_rx: Receiver<Cmd>, ev_tx: Sender<Ev>) {
         p.drain_bus(&ev_tx);
 
         match cmd_rx.recv_timeout(Duration::from_millis(250)) {
-            Ok(Cmd::Play(station)) => {
+            Ok(Cmd::Play {
+                station,
+                proxy_url,
+            }) => {
                 p.retries = 0;
                 p.last_error = None;
                 // Stop any running stream first: changing playbin's uri
                 // mid-playback does not reliably stop the old stream.
                 let _ = p.pipeline.set_state(gst::State::Null);
                 p.uri = Some(station.url.clone());
+                p.proxy_uri = proxy_url;
                 p.playbin.set_property("uri", station.url.as_str());
                 p.want_playing = true;
                 match p.pipeline.set_state(gst::State::Playing) {
                     Ok(_) => {
                         tracing::info!("playing: {}", station.name);
-                        let _ = ev_tx.send(Ev::Playing);
+                        let _ = ev_tx.send(Ev::Playing(station.url));
                     }
                     Err(e) => {
                         p.want_playing = false;
@@ -217,6 +252,7 @@ fn run(cmd_rx: Receiver<Cmd>, ev_tx: Sender<Ev>) {
             Ok(Cmd::Stop) => {
                 p.want_playing = false;
                 p.uri = None;
+                p.proxy_uri = None;
                 p.retries = 0;
                 p.last_error = None;
                 let _ = p.pipeline.set_state(gst::State::Null);

@@ -188,9 +188,40 @@ impl Client {
     }
 }
 
+/// The RadioPit web server proxies third-party streams: the web app falls
+/// back to `https://radiopit.fm/proxy?url=<stream>` when the direct stream
+/// is unreachable (e.g. blocked by the user's firewall), and the tray app
+/// does the same. The proxy lives on the web host, not the API host, so a
+/// `api.` subdomain prefix is stripped when present. Needs no
+/// authentication (the proxy serves any public stream URL).
+pub fn proxy_stream_url(api_url: &str, stream_url: &str) -> String {
+    let base = api_url.trim_end_matches('/');
+    let base = base.replacen("://api.", "://", 1);
+    format!(
+        "{base}/proxy?url={}",
+        url::form_urlencoded::byte_serialize(stream_url.as_bytes()).collect::<String>()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_url_strips_the_api_prefix_and_encodes_the_stream() {
+        assert_eq!(
+            proxy_stream_url("https://api.radiopit.fm", "http://ro2.example.nl:8020/live"),
+            "https://radiopit.fm/proxy?url=http%3A%2F%2Fro2.example.nl%3A8020%2Flive"
+        );
+    }
+
+    #[test]
+    fn proxy_url_uses_a_custom_api_host_as_is() {
+        assert_eq!(
+            proxy_stream_url("https://staging.example.com/", "http://a/b?c=d"),
+            "https://staging.example.com/proxy?url=http%3A%2F%2Fa%2Fb%3Fc%3Dd"
+        );
+    }
 
     #[test]
     fn group_stations_into_playlists() {

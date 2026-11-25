@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 use tray_icon::menu::MenuEvent;
 use tray_icon::TrayIconBuilder;
 
-use crate::api::{Client, Station};
+use crate::api::{self, Client, Station};
 use crate::config;
 use crate::configui;
 use crate::icy::{self, IcyCmd};
@@ -60,6 +60,11 @@ struct TrayApp {
     /// mtime of config.toml as last seen; a change means the config window
     /// (or an editor) saved something.
     config_mtime: Option<SystemTime>,
+    /// The stream URI the ICY metadata task is currently tracking (the
+    /// direct stream, or the proxy fallback once the player switches to
+    /// it). Compared against the player's `Ev::Playing` URI so the
+    /// tracker is only restarted when the URI actually changes.
+    icy_url: Option<String>,
 }
 
 impl TrayApp {
@@ -110,6 +115,7 @@ impl TrayApp {
             tray_icon_cache: HashMap::new(),
             tray_shown: ShownIcon::Logo(false),
             config_mtime,
+            icy_url: None,
         })
     }
 
@@ -189,7 +195,15 @@ impl TrayApp {
             s.menu_dirty = true;
             return;
         }
-        if let Err(e) = self.cmd_tx.send(Cmd::Play(station.clone())) {
+        // Fallback for when the direct stream is unreachable (e.g. blocked
+        // by the local network): the RadioPit server proxies it, like the
+        // web app does. The player switches to it automatically on retries.
+        let api_url = self.shared.lock().unwrap().config.api_url.clone();
+        let proxy_url = Some(api::proxy_stream_url(&api_url, &station.url));
+        if let Err(e) = self.cmd_tx.send(Cmd::Play {
+            station: station.clone(),
+            proxy_url,
+        }) {
             tracing::warn!("player thread gone: {e}");
             return;
         }
@@ -206,34 +220,56 @@ impl TrayApp {
             tracing::warn!("saving config: {e:#}");
         }
         s.menu_dirty = true;
+        // Metadata tracking starts on the direct stream; the player's
+        // `Ev::Playing` events redirect it to the proxy when that is where
+        // the audio actually ends up playing.
+        self.icy_url = Some(station.url.clone());
         self.icy.send(IcyCmd::Play(station.url));
     }
 
     fn stop(&mut self) {
         let _ = self.cmd_tx.send(Cmd::Stop);
         self.icy.send(IcyCmd::Stop);
+        self.icy_url = None;
     }
 
     fn drain_player_events(&mut self) {
-        loop {
-            let Ok(ev) = self.ev_rx.try_recv() else {
-                break;
-            };
+        let mut icy_uri: Option<String> = None;
+        while let Ok(ev) = self.ev_rx.try_recv() {
             let mut s = self.shared.lock().unwrap();
             match ev {
-                Ev::Playing => {
+                Ev::Playing(uri) => {
                     s.playback = Playback::Playing;
                     s.playback_error = None;
+                    // Metadata tracking must follow the URI the player
+                    // actually uses. A (re)start on the same URI must not
+                    // restart the tracker — that would clear the current
+                    // title.
+                    if self.icy_url.as_deref() != Some(uri.as_str()) {
+                        self.icy_url = Some(uri.clone());
+                        icy_uri = Some(uri);
+                    }
                 }
-                Ev::Stopped => s.playback = Playback::Stopped,
+                Ev::Stopped => {
+                    s.playback = Playback::Stopped;
+                    // The stream is gone; its metadata is stale and must
+                    // not linger in the menu or notifications.
+                    s.icy_title = None;
+                    s.icy_artist = None;
+                }
                 Ev::Failed(msg) => {
                     s.playback = Playback::Stopped;
                     s.playback_error = Some(msg);
+                    s.icy_title = None;
+                    s.icy_artist = None;
                     // The stream gave up; the metadata connection is dead too.
                     self.icy.send(IcyCmd::Stop);
                 }
             }
             s.menu_dirty = true;
+        }
+        if let Some(uri) = icy_uri {
+            self.icy.send(IcyCmd::Play(uri));
         }
     }
 
