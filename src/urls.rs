@@ -49,7 +49,7 @@ fn check_url(url: &Url) -> anyhow::Result<()> {
         // A hostname: check *every* address it resolves to.
         Some(Host::Domain(host)) => {
             let port = url.port_or_known_default().unwrap_or(80);
-            let host: &str = &host;
+            let host: &str = host;
             let mut resolved = false;
             for addr in (host, port)
                 .to_socket_addrs()
