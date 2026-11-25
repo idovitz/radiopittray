@@ -13,7 +13,29 @@ stations on radiopit.fm itself — this little app needs no editor.
 
 > **Vibe-coded:** this app was written with AI assistance.
 
-## Dependencies
+## Installation
+
+### Arch Linux (AUR)
+
+The [radiopittray](https://aur.archlinux.org/packages/radiopittray)
+package in the AUR builds the tagged release from source and pulls in
+the required packages:
+
+```sh
+yay -S radiopittray
+```
+
+(the same with `paru`, `pikaur`, …). Without an AUR helper:
+
+```sh
+git clone https://aur.archlinux.org/radiopittray.git
+cd radiopittray
+makepkg -si
+```
+
+### Building from source
+
+The build links against the following system packages:
 
 - A recent Rust toolchain (`rustc` + `cargo`)
 - GTK 3 / GLib
@@ -21,8 +43,6 @@ stations on radiopit.fm itself — this little app needs no editor.
   (codec coverage for whatever the streams throw at the player)
 - A StatusNotifierItem-capable tray backend (e.g. libayatana-appindicator)
 - `xdg-open` (xdg-utils) for the "Open radiopit.fm" action
-
-## Building
 
 ```sh
 cargo build --release
